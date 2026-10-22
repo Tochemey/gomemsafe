@@ -2,6 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": "Keeps every pinned dependency on its latest release: GitHub Actions (pinned to commit digests), the Go module and toolchain, and the dev tools the Makefile runs with go run pkg@version. Commits and PR titles are Conventional Commits (chore(deps): ..., fix(deps): ...), as commitlint and the PR title check require.",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests", ":semanticCommits"],
+  "dependencyDashboard": false,
   "schedule": ["before 6am on monday"],
   "postUpdateOptions": ["gomodTidy"],
   "customManagers": [
