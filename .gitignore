@@ -29,5 +29,11 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+
+# Local planning files (plan.md, todo.md); not part of the repository
+tasks/
+
+
+vendor/

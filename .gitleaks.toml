@@ -1,0 +1,10 @@
+# gitleaks configuration for `make secrets`. The default rules apply to everything that is
+# part of this repository; the gitignored vendor/ copy of third-party code is not scanned.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Third-party code that is not part of this repository (vendor/ is gitignored)"
+paths = [
+  '''(^|/)vendor/''',
+]
