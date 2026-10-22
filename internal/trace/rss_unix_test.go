@@ -25,6 +25,7 @@
 package trace
 
 import (
+	"errors"
 	"syscall"
 	"testing"
 )
@@ -32,6 +33,41 @@ import (
 func TestMaxRSSIsMeasured(t *testing.T) {
 	if got := maxRSS(); got <= 0 {
 		t.Fatalf("maxRSS() = %d, want a positive byte count", got)
+	}
+}
+
+func TestPeakRSSReadsVMHWMOnLinux(t *testing.T) {
+	status := func(string) ([]byte, error) { return []byte("Name:\tgomemsafe\nVmHWM:\t   4096 kB\n"), nil }
+	if got := peakRSS("linux", status); got != 4096*1024 {
+		t.Fatalf("peakRSS on linux = %d, want VmHWM in bytes (%d)", got, 4096*1024)
+	}
+
+	missing := func(string) ([]byte, error) { return nil, errors.New("no /proc") }
+	if got := peakRSS("linux", missing); got <= 0 {
+		t.Fatalf("peakRSS without /proc = %d, want the getrusage fallback", got)
+	}
+
+	if got := peakRSS("darwin", status); got <= 0 || got == 4096*1024 {
+		t.Fatalf("peakRSS on darwin = %d, want getrusage, not VmHWM", got)
+	}
+}
+
+func TestParseVMHWM(t *testing.T) {
+	tests := []struct {
+		status string
+		want   int64
+		ok     bool
+	}{
+		{"VmPeak:\t 9 kB\nVmHWM:\t 12 kB\nVmRSS:\t 3 kB\n", 12 * 1024, true},
+		{"VmHWM:\t 12 MB\n", 0, false},
+		{"VmHWM:\t lots kB\n", 0, false},
+		{"VmRSS:\t 3 kB\n", 0, false},
+	}
+
+	for _, tt := range tests {
+		if got, ok := parseVMHWM([]byte(tt.status)); got != tt.want || ok != tt.ok {
+			t.Errorf("parseVMHWM(%q) = %d, %v; want %d, %v", tt.status, got, ok, tt.want, tt.ok)
+		}
 	}
 }
 

@@ -100,7 +100,9 @@ func packagePath(args []string) string {
 	return ""
 }
 
-// maxRSS returns the peak resident set size of a finished process in bytes.
+// maxRSS returns the peak resident set size of a finished process in bytes. On Linux it is at
+// least rsswrap's own peak, which the kernel carries into the compile across exec; rsswrap is
+// small, so a compile's figure is accurate except for the smallest packages.
 func maxRSS(ps *os.ProcessState) int64 {
 	ru, ok := ps.SysUsage().(*syscall.Rusage)
 	if !ok {
