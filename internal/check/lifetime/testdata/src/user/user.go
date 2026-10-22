@@ -23,7 +23,10 @@
 // Package user calls helper, so MS301 relies on helper's exported summaries.
 package user
 
-import "helper"
+import (
+	"example.com/lib"
+	"helper"
+)
 
 func afterRelease() int {
 	buf := helper.Get()
@@ -82,4 +85,19 @@ func recycledCopy(n int) int {
 	helper.Recycle(n)
 
 	return n
+}
+
+// Callees are named by package name, not by import path.
+func afterLibFree() int {
+	buf := lib.Get()
+	buf.Free()
+
+	return buf.Len() // want `MS301: buf used after the call to \(\*lib.Buf\).Free invalidated it`
+}
+
+func afterLibRelease() int {
+	buf := lib.Get()
+	lib.Release(buf)
+
+	return buf.Len() // want `MS301: buf used after the call to lib.Release invalidated it`
 }

@@ -322,15 +322,18 @@ func (c *checker) funText(site invalidation.Site) string {
 	return calleeName(site.Callee)
 }
 
-func isMethod(fn *types.Func) bool {
-	sig, ok := fn.Type().(*types.Signature)
-	return ok && sig.Recv() != nil
-}
-
-// calleeName returns a short qualified name such as "pool.Release" or "(*Buf).Close".
+// calleeName returns a name qualified by package name, not import path, as Go code spells
+// it: "lib.Release", "(*lib.Buf).Free", or "(*pool.Pool[T]).Put".
 func calleeName(fn *types.Func) string {
-	if isMethod(fn) {
-		return fn.Origin().FullName()
+	fn = fn.Origin()
+
+	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
+		recv := types.TypeString(sig.Recv().Type(), byPackageName)
+		if _, isPointer := sig.Recv().Type().(*types.Pointer); isPointer {
+			recv = "(" + recv + ")"
+		}
+
+		return recv + "." + fn.Name()
 	}
 
 	if fn.Pkg() != nil {
@@ -339,6 +342,9 @@ func calleeName(fn *types.Func) string {
 
 	return fn.Name()
 }
+
+// byPackageName qualifies type names by package name.
+func byPackageName(pkg *types.Package) string { return pkg.Name() }
 
 // argExpr maps the SSA argument equal to v to its source argument; skip is the number of
 // leading SSA arguments with no source counterpart (the receiver).
