@@ -67,6 +67,7 @@ a contract that nothing checks never looks checked.
 | `make check-fast` | Vet, lint, dependency allowlist, test pairing, secrets (seconds) |
 | `make check-task` | `check-fast` plus race-enabled tests and the 85% coverage floor |
 | `make check-full` | `check-task` plus govulncheck and actionlint (what CI runs) |
+| `make fuzz` | Fuzz the directive parser and the vet JSON decoder (`FUZZTIME`, default 30s each) |
 | `make bench-short` | The benchmark on the small generated corpus; CI runs the full corpus (`make bench`) |
 
 The quality bar is [CONSTRAINTS.md](CONSTRAINTS.md), and the rules for contributors and

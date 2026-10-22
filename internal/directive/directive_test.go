@@ -24,12 +24,15 @@ package directive_test
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/analysistest"
 
+	"github.com/tochemey/gomemsafe/internal/catalog"
 	"github.com/tochemey/gomemsafe/internal/directive"
 	"github.com/tochemey/gomemsafe/internal/vetmode"
 )
@@ -80,6 +83,76 @@ func TestReportsNothingInFactsOnlyRuns(t *testing.T) {
 
 func TestSuppressedMatchesNamedIDsOnThatLine(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), suppressed, "s")
+}
+
+// FuzzDirective runs arbitrary text after //memsafe: through the directive analyzer. A
+// directive is either a suppression of known check IDs or exactly one MS000 diagnostic: it is
+// never silently ignored, and it never suppresses an ID outside the catalogue.
+func FuzzDirective(f *testing.F) {
+	for _, seed := range []string{
+		"allow MS301 the buffer is copied first", "allow MS301,MS302 two checks", "allow",
+		"allow MS301", "allow MS999 unknown", "allow ,, empty IDs", "allow MS301\ttab",
+		"allow  MS301 two spaces", "owned", "strict", "unknownverb", "",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, text string) {
+		// A line comment ends at the first line break.
+		if strings.ContainsAny(text, "\n\r") {
+			t.Skip("a directive is one line")
+		}
+
+		src := "package p\n\n//memsafe:" + text + "\nvar x int\n"
+
+		fset := token.NewFileSet()
+
+		file, err := parser.ParseFile(fset, "p.go", src, parser.ParseComments)
+		if err != nil || len(file.Comments) != 1 || len(file.Decls) != 1 {
+			t.Skip("the text does not form one line comment followed by a declaration")
+		}
+
+		var diags []analysis.Diagnostic
+
+		pass := &analysis.Pass{
+			Analyzer: directive.Analyzer, Fset: fset, Files: []*ast.File{file},
+			Report: func(d analysis.Diagnostic) { diags = append(diags, d) },
+		}
+
+		res, err := directive.Analyzer.Run(pass)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, d := range diags {
+			if d.Category != string(catalog.MalformedDirective) {
+				t.Fatalf("%q: diagnostic %q has category %q, want MS000", text, d.Message, d.Category)
+			}
+		}
+
+		if len(diags) > 1 {
+			t.Fatalf("%q: %d diagnostics for one directive", text, len(diags))
+		}
+
+		pos := file.Decls[0].Pos()
+		suppressed := 0
+
+		for _, id := range strings.FieldsFunc(text, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+			if !res.(*directive.Result).Suppressed(fset, pos, id) {
+				continue
+			}
+
+			if !catalog.IsKnown(id) {
+				t.Fatalf("%q: suppresses %q, which is not in the catalogue", text, id)
+			}
+
+			suppressed++
+		}
+
+		if len(diags) == 0 && suppressed == 0 {
+			t.Fatalf("%q: neither reported nor a suppression", text)
+		}
+	})
 }
 
 // silentT discards analysistest's complaints about expectations, because in a facts-only run

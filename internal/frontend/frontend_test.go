@@ -299,6 +299,30 @@ func TestDecodeIsTheExportedForm(t *testing.T) {
 	}
 }
 
+// FuzzDecode feeds arbitrary bytes to the vet JSON decoder. It must never panic, and decoding
+// the same bytes twice gives the same diagnostics and errors, whatever the map order.
+func FuzzDecode(f *testing.F) {
+	for _, seed := range []string{
+		`{"p": {"lifetime": [{"category": "MS301", "posn": "a.go:1:2", "message": "m"}]}}`,
+		`{"p": {"lifetime": {"error": "boom"}}}`,
+		`{"p": {"lifetime": []}}{"p [p.test]": {"lifetime": [{"posn": "a.go:1:2", "message": "m"}]}}`,
+		`{"p": {"lifetime": [{"related": [{"posn": "b.go:3:4", "message": "r"}], "suggested_fixes": [{"message": "h"}]}]}}`,
+		`{}`, ``, `{`, `[]`, `{"p": 1}`,
+	} {
+		f.Add([]byte(seed))
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		first, firstErrs, err1 := Decode(data)
+		second, secondErrs, err2 := Decode(data)
+
+		if (err1 == nil) != (err2 == nil) || len(first) != len(second) || len(firstErrs) != len(secondErrs) {
+			t.Fatalf("decoding %q twice: %d/%d diagnostics, %d/%d errors, %v/%v",
+				data, len(first), len(second), len(firstErrs), len(secondErrs), err1, err2)
+		}
+	})
+}
+
 func TestDecodeRejectsMalformedOutput(t *testing.T) {
 	for _, stream := range []string{`{"p": `, `{"p": {"lifetime": 3}}`} {
 		if _, err := decode([]byte(stream)); err == nil {
