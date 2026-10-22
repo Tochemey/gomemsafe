@@ -41,7 +41,7 @@ The quality bar for gomemsafe. Every change must meet it before it is handed ove
 **Where checks run:**
 - **edit:** in the edit loop, seconds (`make check-fast`).
 - **task end:** before a task is handed over, at most 90 seconds (`make check-task`).
-- **CI:** on every pull request (`make check-full`).
+- **CI:** on every pull request (`make check-full`), except one that touches only Markdown.
 
 ## Measured, not yet enforced
 

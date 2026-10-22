@@ -84,11 +84,13 @@ add that code to the check's false-positive fixtures (for MS301,
   breaking change, for example `feat(lifetime)!: ...`. CI rejects anything else.
 - **Keep one change per pull request.** A refactor and a new feature are two pull requests.
 - **Open the pull request against `main`.** These checks must pass:
-  - `make check-full` on Go 1.26 and Go 1.27
+  - `ci`, which sums up `make check-full` on Go 1.26 and Go 1.27 and the benchmark, whose
+    results appear in the job summary
   - commitlint and the PR title check
   - CodeQL
 
-  The benchmark runs as well, and its results appear in the job summary.
+  A change that touches only Markdown files skips the build and CodeQL; `ci`, commitlint, and
+  the PR title check still report.
 
 ## Authorship
 
