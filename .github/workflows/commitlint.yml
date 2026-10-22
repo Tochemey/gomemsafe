@@ -1,0 +1,31 @@
+# Every commit follows Conventional Commits (https://www.conventionalcommits.org). With no
+# config file in the repository, the action applies @commitlint/config-conventional. The PR
+# title check (pr-title.yml) allows the same types, so a squash merge, which uses the PR title,
+# also passes.
+name: commitlint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # ready_for_review is not a default activity type: list it, with the defaults, so marking a
+    # draft ready also starts a run.
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # The full history, so that every commit of the push or pull request can be read.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed # v6.2.1

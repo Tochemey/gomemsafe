@@ -1,0 +1,14 @@
+{
+  "LABEL": {
+    "name": "",
+    "color": "EEEEEE"
+  },
+  "CHECKS": {
+    "regexp": "^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\\([^)]+\\))?!?: \\S.*$"
+  },
+  "MESSAGES": {
+    "success": "PR title is a valid Conventional Commit",
+    "failure": "PR title is not a valid Conventional Commit",
+    "notice": "PR titles look like `type(scope): description`, with type one of build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test. The scope and a `!` for a breaking change are optional."
+  }
+}

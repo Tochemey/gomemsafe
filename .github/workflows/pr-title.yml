@@ -1,0 +1,28 @@
+# The PR title follows Conventional Commits, with the types of @commitlint/config-conventional
+# that commitlint.yml enforces: a squash merge turns the title into the commit on main. The
+# rule is in .github/pr-title-checker-config.json.
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+# Titles are often edited in quick succession: keep one run per pull request.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate PR title
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: thehanimo/pr-title-checker@b69bc3a841cf4e3cfef2d822625d8c90a588e9da # v2.0.0
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          configuration_path: .github/pr-title-checker-config.json
