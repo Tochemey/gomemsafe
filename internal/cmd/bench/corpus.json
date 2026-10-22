@@ -1,0 +1,14 @@
+[
+  {
+    "name": "zap",
+    "repo": "https://github.com/uber-go/zap.git",
+    "tag": "v1.28.0",
+    "commit": "5b81b37b81b8e2ed447a6f57991e372ee4fa5c8f",
+    "patterns": ["./..."]
+  },
+  {
+    "name": "synthetic",
+    "synthetic": true,
+    "patterns": ["./..."]
+  }
+]
