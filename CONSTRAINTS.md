@@ -48,7 +48,7 @@ The quality bar for gomemsafe. Every change must meet it before it is handed ove
 
 | Metric | Today | Direction | When it becomes enforced |
 |--------|-------|-----------|--------------------------|
-| Performance budgets (design §7.1: warm re-run, edit-one-package, cold run, peak RSS), measured by the CI `bench` job on zap, GoAkt, and the generated corpus | Not recorded yet: the first CI run produces the baseline | Warn on regression | Set from the first CI run (T11), then must not get worse |
+| Performance budgets (design §7.1: warm re-run, edit-one-package, cold run, peak RSS), measured by the CI `bench` job on zap, GoAkt, and the generated corpus | Baseline from CI run 39870978141 (2026-10-22, commit 55008a3, ubuntu-24.04, 4 CPUs, Go 1.27.3). Every budget met. Cold run vs `go vet`: zap 0.97×, GoAkt 0.93×, synthetic 1.02×. Warm run: equal to `go vet` on all three. Edit re-analysis: 60, 70, and 10 ms against 300 ms. Worst peak RSS vs compile: 0.70×, 1.53×, 0.56× against 2×. Dataflow budget hits: 0. MS301 findings: 0 | Must not get worse; a missed budget in the `bench` job summary is triaged before the next release | When the benchmark compares each run with this baseline and fails on a regression (design §7.2, item 8) |
 
 ## Dependency allowlist
 
