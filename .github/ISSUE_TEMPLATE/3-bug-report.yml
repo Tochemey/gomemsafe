@@ -1,0 +1,58 @@
+name: Bug report
+description: gomemsafe crashes, fails to run, or behaves wrongly in some other way.
+title: "bug: "
+labels: [bug]
+assignees: [Tochemey]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a wrong finding, use **False positive**; for a bug gomemsafe missed, use **Missed bug**.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+      description: What you ran, what happened, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The exact command, and the smallest module or code that reproduces the problem. A link to a public repository at a fixed commit works too.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The full output, including the exit code (`echo $?`).
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gomemsafe version
+      description: The output of `go list -m github.com/tochemey/gomemsafe` in your module.
+    validations:
+      required: true
+  - type: input
+    id: go
+    attributes:
+      label: Go version and platform
+      description: The output of `go version`, for example `go1.27.3 linux/amd64`.
+    validations:
+      required: true
+  - type: dropdown
+    id: driver
+    attributes:
+      label: How you run gomemsafe
+      options:
+        - go tool gomemsafe
+        - go vet -vettool
+        - golangci-lint
+        - gopls
+        - Other
+    validations:
+      required: true

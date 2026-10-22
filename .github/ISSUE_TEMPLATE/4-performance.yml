@@ -1,0 +1,53 @@
+name: Performance report
+description: gomemsafe is slower or uses more memory than it should.
+title: "perf: "
+labels: [performance]
+assignees: [Tochemey]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        gomemsafe aims for a cold run within twice the time of `go vet ./...`, and a warm run as fast as `go vet` (see the [budgets](https://github.com/Tochemey/gomemsafe/blob/main/docs/design.md#71-budgets-targets-validated-and-fixed-during-m0)).
+  - type: textarea
+    id: description
+    attributes:
+      label: What is slow
+      description: The command, how long it takes or how much memory it uses, and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: comparison
+    attributes:
+      label: Comparison with go vet
+      description: The time of `go vet ./...` and of `go tool gomemsafe ./...` on the same tree, both cold (after `go clean -cache`) and warm.
+    validations:
+      required: true
+  - type: textarea
+    id: stats
+    attributes:
+      label: Stats
+      description: The output of `go tool gomemsafe -stats ./...`.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: project
+    attributes:
+      label: Project
+      description: A link to the project at a fixed commit, or its size (packages and lines of code).
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gomemsafe version
+      description: The output of `go list -m github.com/tochemey/gomemsafe` in your module.
+    validations:
+      required: true
+  - type: input
+    id: go
+    attributes:
+      label: Go version, platform, and CPUs
+      description: For example `go1.27.3 linux/amd64, 8 CPUs`.
+    validations:
+      required: true

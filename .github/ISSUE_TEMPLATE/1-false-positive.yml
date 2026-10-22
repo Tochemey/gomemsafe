@@ -1,0 +1,58 @@
+name: False positive
+description: gomemsafe reports a finding on code that is correct.
+title: "false positive: "
+labels: [false-positive]
+assignees: [Tochemey]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A finding on correct code is a bug, and the most useful report you can send. The smaller the code that reproduces it, the faster it gets fixed.
+  - type: dropdown
+    id: check
+    attributes:
+      label: Check
+      description: The check ID at the start of the diagnostic.
+      options:
+        - MS301 (use after invalidation)
+        - MS000 (malformed directive)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code
+      description: The smallest complete Go code that reproduces the finding.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: gomemsafe output
+      description: The diagnostic exactly as gomemsafe printed it.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why the code is correct
+      description: For example, the value is not used after the call on any path, or the call does not take it back.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gomemsafe version
+      description: The output of `go list -m github.com/tochemey/gomemsafe` in your module.
+    validations:
+      required: true
+  - type: input
+    id: go
+    attributes:
+      label: Go version
+      description: The output of `go version`.
+    validations:
+      required: true

@@ -1,0 +1,49 @@
+name: Missed bug
+description: gomemsafe stays silent on code that has a memory-safety bug.
+title: "missed bug: "
+labels: [false-negative]
+assignees: [Tochemey]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before reporting, check the [known limitations](https://github.com/Tochemey/gomemsafe/blob/main/docs/design.md#9-known-limitations): some misses are deliberate, so that gomemsafe never reports correct code.
+  - type: dropdown
+    id: check
+    attributes:
+      label: Check that should report it
+      options:
+        - MS301 (use after invalidation)
+        - A planned check (name its ID below)
+        - No existing or planned check
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code
+      description: The smallest complete Go code that contains the bug.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected diagnostic
+      description: Where gomemsafe should report, and why the code is wrong.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gomemsafe version
+      description: The output of `go list -m github.com/tochemey/gomemsafe` in your module.
+    validations:
+      required: true
+  - type: input
+    id: go
+    attributes:
+      label: Go version
+      description: The output of `go version`.
+    validations:
+      required: true

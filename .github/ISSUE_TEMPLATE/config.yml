@@ -1,0 +1,9 @@
+# Every issue starts from a form, so reports arrive with what is needed to act on them.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Tochemey/gomemsafe/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue (see SECURITY.md).
+  - name: How gomemsafe works
+    url: https://github.com/Tochemey/gomemsafe/blob/main/docs/design.md
+    about: The checks, the annotation language, and the known limitations.
