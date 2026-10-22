@@ -92,7 +92,9 @@ jobs:
 
   bench:
     name: benchmark
-    runs-on: ubuntu-latest
+    # A fixed image keeps results comparable across runs: a runner upgrade arrives as its own
+    # Renovate pull request instead of a silent shift in the numbers.
+    runs-on: ubuntu-24.04
     needs: check
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
