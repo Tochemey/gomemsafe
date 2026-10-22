@@ -102,10 +102,10 @@ stays byte-identical across edits that do not change a summary.
 - `go vet -vettool=<binary> -json -work -x ./...` keeps the work directory, where each
   package's `vet.cfg` and its facts file (`VetxOutput`) can be inspected.
 - The CI `bench` job measures every budget of design §7.1 on the pinned corpus in
-  `internal/cmd/bench/corpus.json` (zap and a generated corpus) and puts the results table in
+  `internal/cmd/bench/corpus.json` (zap, GoAkt, and a generated corpus) and puts the results table in
   the job summary. Locally, `make bench-short` runs only the generated corpus;
   `go run ./internal/cmd/bench` takes `-corpus`, `-scenario`, and `-out`. A run leaves nothing
-  behind, even when interrupted. To move the zap pin, change the tag and the commit together.
+  behind, even when interrupted. To move a pin, change its tag and commit together.
 - A function that exceeds the dataflow budget reports nothing and counts as a budget hit.
   Raise `flow.DefaultBudget` only with a benchmark that shows the need.
 

@@ -7,6 +7,13 @@
     "patterns": ["./..."]
   },
   {
+    "name": "goakt",
+    "repo": "https://github.com/Tochemey/goakt.git",
+    "tag": "v4.6.3",
+    "commit": "f93a09982e96fb7449f0fa2214847bd7c8ddb3f0",
+    "patterns": ["./..."]
+  },
+  {
     "name": "synthetic",
     "synthetic": true,
     "patterns": ["./..."]

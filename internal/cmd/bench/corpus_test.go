@@ -25,6 +25,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -34,22 +35,23 @@ func TestLoadCorpusAcceptsThePinnedCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := 0
+	var repos []string
 
 	for _, e := range entries {
 		if e.Repo == "" {
 			continue
 		}
 
-		repos++
+		repos = append(repos, e.Name)
 
-		if len(e.Commit) != 40 {
-			t.Errorf("%s: commit %q is not a full SHA", e.Name, e.Commit)
+		if len(e.Commit) != 40 || e.Tag == "" {
+			t.Errorf("%s: pinned to tag %q and commit %q, want a tag and a full SHA", e.Name, e.Tag, e.Commit)
 		}
 	}
 
-	if repos != 1 {
-		t.Fatalf("the corpus pins %d repositories, want exactly one small library", repos)
+	// The corpus is kept small: every repository added makes each CI build slower.
+	if want := []string{"zap", "goakt"}; !slices.Equal(repos, want) {
+		t.Fatalf("the corpus pins %v, want %v", repos, want)
 	}
 }
 

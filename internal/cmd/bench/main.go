@@ -21,11 +21,11 @@
 // SOFTWARE.
 
 // Command bench measures gomemsafe against the budgets of docs/design.md §7.1 on a small
-// pinned corpus (corpus.json): one real library, pinned by commit, and a generated corpus that
-// exercises every part of the engine. gomemsafe is a library, so its benchmark stays small
-// enough to run on every CI build.
+// pinned corpus (corpus.json): two real libraries, zap and GoAkt, each pinned by commit, and a
+// generated corpus that exercises every part of the engine. The corpus stays small enough to
+// run on every CI build.
 //
-//	go run ./internal/cmd/bench [-short] [-corpus zap,synthetic] [-scenario cold,warm,edit,rss] [-out dir]
+//	go run ./internal/cmd/bench [-short] [-corpus zap,goakt,synthetic] [-scenario cold,warm,edit,rss] [-out dir]
 //
 // For each corpus entry it measures a cold go vet against a cold gomemsafe run (each with a
 // fresh build cache), the warm re-runs of both, an edit to the most-imported package, and the

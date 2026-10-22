@@ -353,8 +353,9 @@ Speed is a first-class requirement, not an afterthought. The rationale is in
 7. **Allocation discipline in the engine.** Values get dense integer IDs, the bitset state is
    reused between functions, the hot loops contain no maps, and profiling decides any further
    tuning.
-8. **A benchmark in CI.** A small pinned corpus, one real library (`go.uber.org/zap`, which
-   uses `sync.Pool` throughout) and a generated corpus, is measured on every build by
+8. **A benchmark in CI.** A small pinned corpus, two real libraries (`go.uber.org/zap`, which
+   uses `sync.Pool` throughout, and the GoAkt actor framework, a larger module with a deep
+   dependency graph) and a generated corpus, is measured on every build by
    `internal/cmd/bench`. Once the first runs give a stable baseline, a regression of more
    than 5% in wall time or RSS fails the build.
 

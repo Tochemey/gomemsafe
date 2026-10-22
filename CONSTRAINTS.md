@@ -47,7 +47,7 @@ The quality bar for gomemsafe. Every change must meet it before it is handed ove
 
 | Metric | Today | Direction | When it becomes enforced |
 |--------|-------|-----------|--------------------------|
-| Performance budgets (design §7.1: warm re-run, edit-one-package, cold run, peak RSS), measured by the CI `bench` job on zap and the generated corpus | Not recorded yet: the first CI run produces the baseline | Warn on regression | Set from the first CI run (T11), then must not get worse |
+| Performance budgets (design §7.1: warm re-run, edit-one-package, cold run, peak RSS), measured by the CI `bench` job on zap, GoAkt, and the generated corpus | Not recorded yet: the first CI run produces the baseline | Warn on regression | Set from the first CI run (T11), then must not get worse |
 
 ## Dependency allowlist
 
