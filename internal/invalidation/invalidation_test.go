@@ -92,7 +92,7 @@ func resliced(s []byte) byte { release(s[:0]); return s[0] }
 
 func copied(n int, s string, b box) { release(n); release(s); release(b) }
 
-func generic[T any](v T) { release(v) }
+func generic[T any](v T) T { release(v); return v }
 
 type releaser struct{}
 
@@ -142,17 +142,31 @@ func TestAnalyzeReturnsNilWithoutSites(t *testing.T) {
 }
 
 // TestAnalyzeSkipsArgumentsThatShareNothing covers values copied by the call (an int, a
-// string, a struct, a type parameter) and a method value, whose SSA arguments do not line up
-// with the method's parameters.
+// string, a struct) and a method value, whose SSA arguments do not line up with the method's
+// parameters.
 func TestAnalyzeSkipsArgumentsThatShareNothing(t *testing.T) {
 	pkg := build(t)
 
-	for _, name := range []string{"copied", "generic", "methodValue"} {
+	for _, name := range []string{"copied", "methodValue"} {
 		var eng flow.Engine
 
 		if a := invalidation.Analyze(pkg.Func(name), lookup, &eng); a != nil {
 			t.Errorf("%s: got %d sites, want none", name, len(a.Sites))
 		}
+	}
+}
+
+// TestTypeParametersAreSummarisedButNotReported: a generic function invalidates its
+// argument for its callers to decide, but a use in its own body may be of a plain value.
+func TestTypeParametersAreSummarisedButNotReported(t *testing.T) {
+	a := analyze(t, build(t), "generic")
+
+	if uses := a.Uses(); len(uses) != 0 {
+		t.Errorf("%d uses reported in the generic body, want 0", len(uses))
+	}
+
+	if got := a.InvalidAtReturn(); len(got) != 1 || !got[0] {
+		t.Errorf("InvalidAtReturn = %v, want [true]", got)
 	}
 }
 

@@ -31,6 +31,11 @@
 // although their dynamic type is unknown, because the values held in a sync.Pool are pointers
 // in practice (staticcheck's SA6002 flags the others).
 //
+// Values of a type parameter are tracked too, so that a generic wrapper such as zap's
+// pool.Pool[T].Put gets a summary; each call site then decides from its concrete argument
+// whether memory is shared. Their uses inside the generic body are not reported, because an
+// instantiation may be a plain value.
+//
 // Values are grouped into alias classes: a value and everything that is the same memory under
 // another type or length (interface conversions, type assertions, type changes, reslices).
 // Invalidating any member invalidates the class. A phi node starts its own class and is invalid only if every incoming
@@ -218,7 +223,7 @@ func (a *Analysis) Uses() []Use {
 			}
 
 			c, tracked := a.classOf[*op]
-			if !tracked || reported[c] || !state.Has(c) {
+			if !tracked || reported[c] || !state.Has(c) || isTypeParam(a.bases[c].Type()) {
 				continue
 			}
 
@@ -293,7 +298,7 @@ func (a *Analysis) addSite(call *ssa.Call, lookup Lookup) {
 		}
 
 		base := Base(arg)
-		if !sharesMemory(base.Type()) {
+		if !sharesMemory(base.Type()) && !isTypeParam(base.Type()) {
 			continue
 		}
 
@@ -476,10 +481,10 @@ func arity(sig *types.Signature) int {
 }
 
 // sharesMemory reports whether a value of type t refers to memory that a call can keep, so
-// that the caller must not use it afterwards. Type parameters are not tracked: an
-// instantiation may be a plain value.
+// that the caller must not use it afterwards. A type parameter does not: whether it shares
+// memory depends on the instantiation.
 func sharesMemory(t types.Type) bool {
-	if _, isParam := t.(*types.TypeParam); isParam {
+	if isTypeParam(t) {
 		return false
 	}
 
@@ -524,4 +529,9 @@ func isNilComparison(op *ssa.BinOp) bool {
 	}
 
 	return isNil(op.X) || isNil(op.Y)
+}
+
+func isTypeParam(t types.Type) bool {
+	_, ok := t.(*types.TypeParam)
+	return ok
 }

@@ -65,3 +65,29 @@ func GetPooled() *Pooled { return pooled.Get().(*Pooled) }
 
 // Release returns the receiver itself to the pool: argument 0.
 func (p *Pooled) Release() { pooled.Put(p) } // want Release:`invalidates\(0x1\)`
+
+// Pool mirrors go.uber.org/zap/internal/pool: a generic wrapper around sync.Pool.
+type Pool[T any] struct{ pool sync.Pool }
+
+// Put returns x to the pool: argument 1, after the receiver.
+func (p *Pool[T]) Put(x T) { p.pool.Put(x) } // want Put:`invalidates\(0x2\)`
+
+// Buffer mirrors zap's buffer.Buffer, which frees itself through a generic pool.
+type Buffer struct{ bs []byte }
+
+var buffers Pool[*Buffer]
+
+// NewBuffer returns an empty buffer.
+func NewBuffer() *Buffer { return &Buffer{} }
+
+// Len returns the number of bytes in b.
+func (b *Buffer) Len() int { return len(b.bs) }
+
+// Free returns b to its pool through the generic wrapper.
+func (b *Buffer) Free() { buffers.Put(b) } // want Free:`invalidates\(0x1\)`
+
+// Recycle returns any value to a pool through the generic wrapper.
+func Recycle[T any](x T) { // want Recycle:`invalidates\(0x1\)`
+	var p Pool[T]
+	p.Put(x)
+}

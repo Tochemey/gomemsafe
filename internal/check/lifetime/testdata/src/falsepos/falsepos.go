@@ -148,3 +148,10 @@ func methodValue(a, n, other *releaser) int {
 
 	return n.n
 }
+
+// inGenericBody is not reported: T may be a value that Put copies.
+func inGenericBody[T any](v T) T {
+	pool.Put(v)
+
+	return v
+}

@@ -411,9 +411,11 @@ These are stated plainly so that users know what a clean run does *not* prove.
   conservatively.
 - MS301 tracks only values that share memory with the callee: pointers, slices (reslices
   included), maps, channels, functions, unsafe pointers, and interfaces. Values the call copies
-  (numbers, strings, structs and arrays passed by value, type parameters) cannot be invalidated
-  and are not tracked. Values loaded through memory and calls through method values are not
-  tracked either, so uses of them are missed rather than reported.
+  (numbers, strings, structs and arrays passed by value) cannot be invalidated and are not
+  tracked. A value of a type parameter is summarised for callers, which decide from their
+  concrete argument, but its uses inside the generic body are not reported. Values loaded
+  through memory and calls through method values are not tracked, so uses of them are missed
+  rather than reported.
 - The C side of cgo is invisible to the analyser.
 - gomemsafe complements `-race`, `go vet`, staticcheck, and nilaway. It does not replace them.
 

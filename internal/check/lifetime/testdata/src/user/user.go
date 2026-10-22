@@ -61,3 +61,25 @@ func afterSelfRelease() int {
 
 	return p.Len() // want `MS301: p used after the call to \(\*helper.Pooled\).Release invalidated it`
 }
+
+// afterFree mirrors zap: Buffer.Free returns the buffer through a generic pool wrapper.
+func afterFree() int {
+	buf := helper.NewBuffer()
+	buf.Free()
+
+	return buf.Len() // want `MS301: buf used after the call to \(\*helper.Buffer\).Free invalidated it`
+}
+
+func afterRecycle() int {
+	buf := helper.Get()
+	helper.Recycle(buf)
+
+	return buf.Len() // want `MS301: buf used after the call to helper.Recycle invalidated it`
+}
+
+// recycledCopy passes an int to the same generic function, which copies it.
+func recycledCopy(n int) int {
+	helper.Recycle(n)
+
+	return n
+}
