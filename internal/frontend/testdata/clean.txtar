@@ -1,0 +1,24 @@
+Correct pool use: nothing may be reported.
+
+-- go.mod --
+module example.com/clean
+
+go 1.26
+-- clean.go --
+package clean
+
+import (
+	"bytes"
+	"sync"
+)
+
+var pool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+func Good(p string) int {
+	buf := pool.Get().(*bytes.Buffer)
+	defer pool.Put(buf)
+
+	buf.WriteString(p)
+
+	return buf.Len()
+}

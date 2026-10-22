@@ -1,0 +1,21 @@
+One use after sync.Pool.Put: MS301 must be reported.
+
+-- go.mod --
+module example.com/findings
+
+go 1.26
+-- findings.go --
+package findings
+
+import (
+	"bytes"
+	"sync"
+)
+
+var pool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+func Bad(p string) {
+	buf := pool.Get().(*bytes.Buffer)
+	pool.Put(buf)
+	buf.WriteString(p)
+}

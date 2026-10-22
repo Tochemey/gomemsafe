@@ -1,0 +1,10 @@
+A package that does not type-check: go vet itself fails.
+
+-- go.mod --
+module example.com/broken
+
+go 1.26
+-- broken.go --
+package broken
+
+func F() { undefined() }

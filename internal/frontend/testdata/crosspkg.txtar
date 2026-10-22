@@ -1,0 +1,41 @@
+Package b uses a buffer after a.Release returned it. The test edits the body of Work, which
+changes no summary, and checks that a's facts file stays byte-identical.
+
+-- go.mod --
+module example.com/cross
+
+go 1.26
+-- a/a.go --
+package a
+
+import (
+	"bytes"
+	"sync"
+)
+
+var pool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+func Get() *bytes.Buffer { return pool.Get().(*bytes.Buffer) }
+
+func Release(b *bytes.Buffer) { pool.Put(b) }
+
+//go:noinline
+func Work() int {
+	s := 0
+	for i := range 10 {
+		s += i
+	}
+
+	return s
+}
+-- b/b.go --
+package b
+
+import "example.com/cross/a"
+
+func Use() int {
+	buf := a.Get()
+	a.Release(buf)
+
+	return buf.Len()
+}
