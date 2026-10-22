@@ -102,6 +102,8 @@ type tools struct {
 type traceSummary struct {
 	packages     map[string]bool
 	rssByPackage map[string]int64
+	// processTime is the longest gomemsafe process of each package.
+	processTime  map[string]time.Duration
 	analyzerTime time.Duration
 	ssaTime      time.Duration
 	budgetHits   int
@@ -124,12 +126,15 @@ type finding struct {
 
 // measurement is everything one corpus entry produced.
 type measurement struct {
-	Packages        int           `json:"packages"`
-	ColdVet         time.Duration `json:"cold_vet"`
-	ColdTool        time.Duration `json:"cold_gomemsafe"`
-	WarmVet         time.Duration `json:"warm_vet"`
-	WarmTool        time.Duration `json:"warm_gomemsafe"`
+	Packages int           `json:"packages"`
+	ColdVet  time.Duration `json:"cold_vet"`
+	ColdTool time.Duration `json:"cold_gomemsafe"`
+	WarmVet  time.Duration `json:"warm_vet"`
+	WarmTool time.Duration `json:"warm_gomemsafe"`
+	// Edit is the wall time of the whole go vet run after the edit; EditAnalysis is the
+	// gomemsafe process of the edited package alone, which the edit budget applies to.
 	Edit            time.Duration `json:"edit"`
+	EditAnalysis    time.Duration `json:"edit_analysis"`
 	EditPackage     string        `json:"edit_package,omitempty"`
 	EditLines       int           `json:"edit_package_lines,omitempty"`
 	EditReanalysed  int           `json:"edit_reanalysed_packages,omitempty"`
@@ -140,6 +145,8 @@ type measurement struct {
 	MaxCompileRSS   int64         `json:"max_compile_rss"`
 	MaxRSSRatio     float64       `json:"max_rss_ratio"`
 	RSSRatioPackage string        `json:"max_rss_ratio_package,omitempty"`
+	RSSRatioTool    int64         `json:"max_rss_ratio_gomemsafe,omitempty"`
+	RSSRatioCompile int64         `json:"max_rss_ratio_compile,omitempty"`
 	// Findings are gomemsafe's diagnostics from the cold run, to be triaged by hand.
 	Findings []finding `json:"findings"`
 }
@@ -253,6 +260,7 @@ func measureEdit(ctx context.Context, dir string, e Entry, toolArgs []string, ca
 	}
 
 	m.EditPackage, m.EditLines, m.EditReanalysed = target.importPath, target.lines, len(sum.packages)
+	m.EditAnalysis = sum.processTime[target.importPath]
 
 	return nil
 }
@@ -278,6 +286,7 @@ func measureRSS(ctx context.Context, dir string, e Entry, t tools, work string, 
 
 	m.MaxCompileRSS = maxValue(compileRSS)
 	m.MaxRSSRatio, m.RSSRatioPackage = maxRatio(toolRSS, compileRSS)
+	m.RSSRatioTool, m.RSSRatioCompile = toolRSS[m.RSSRatioPackage], compileRSS[m.RSSRatioPackage]
 
 	return nil
 }
@@ -367,7 +376,10 @@ func countLines(dir string) (int, error) {
 
 // readTrace aggregates every trace file in dir. A missing directory means nothing ran.
 func readTrace(dir string) (traceSummary, error) {
-	sum := traceSummary{packages: make(map[string]bool), rssByPackage: make(map[string]int64)}
+	sum := traceSummary{
+		packages: make(map[string]bool), rssByPackage: make(map[string]int64),
+		processTime: make(map[string]time.Duration),
+	}
 
 	files, err := filepath.Glob(filepath.Join(dir, "*"+traceExt))
 	if err != nil {
@@ -560,6 +572,7 @@ func (s *traceSummary) readFile(name string) error {
 func (s *traceSummary) add(e trace.Event) {
 	s.packages[e.Package] = true
 	s.rssByPackage[e.Package] = max(s.rssByPackage[e.Package], e.MaxRSS)
+	s.processTime[e.Package] = max(s.processTime[e.Package], time.Duration(e.Elapsed))
 
 	switch e.Kind {
 	case trace.KindRun:

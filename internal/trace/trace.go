@@ -67,7 +67,9 @@ const (
 )
 
 var (
-	dir      = os.Getenv(EnvVar)
+	dir = os.Getenv(EnvVar)
+	// start approximates the process start: package variables are initialised before main.
+	start    = time.Now()
 	mu       sync.Mutex
 	file     *os.File
 	openErr  error
@@ -84,6 +86,9 @@ type Event struct {
 	VetxOnly bool   `json:"vetx_only"`
 	Nanos    int64  `json:"nanos"`
 	MaxRSS   int64  `json:"max_rss"`
+	// Elapsed is the time since the process started, so the last event of a process gives its
+	// wall time, type checking included.
+	Elapsed int64 `json:"elapsed_nanos"`
 }
 
 // Enabled reports whether tracing is on.
@@ -111,6 +116,7 @@ func Record(pkg, analyzer, kind string, d time.Duration) {
 	line, err := json.Marshal(Event{
 		PID: os.Getpid(), Package: pkg, Analyzer: analyzer, Kind: kind,
 		VetxOnly: vetmode.FactsOnly(), Nanos: d.Nanoseconds(), MaxRSS: maxRSS(),
+		Elapsed: time.Since(start).Nanoseconds(),
 	})
 	if err != nil {
 		return

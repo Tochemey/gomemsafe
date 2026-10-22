@@ -71,9 +71,9 @@ func TestReadTraceAggregates(t *testing.T) {
 	var lines []byte
 
 	for _, e := range []trace.Event{
-		{Package: "p", Kind: trace.KindRun, Nanos: 3e6, MaxRSS: 10},
-		{Package: "p", Kind: trace.KindSSA, Nanos: 1e6, MaxRSS: 30},
-		{Package: "q", Kind: trace.KindBudget, MaxRSS: 20},
+		{Package: "p", Kind: trace.KindRun, Nanos: 3e6, MaxRSS: 10, Elapsed: 5e6},
+		{Package: "p", Kind: trace.KindSSA, Nanos: 1e6, MaxRSS: 30, Elapsed: 4e6},
+		{Package: "q", Kind: trace.KindBudget, MaxRSS: 20, Elapsed: 2e6},
 	} {
 		b, err := json.Marshal(e)
 		if err != nil {
@@ -91,7 +91,7 @@ func TestReadTraceAggregates(t *testing.T) {
 	}
 
 	if len(sum.packages) != 2 || sum.analyzerTime != 3*time.Millisecond || sum.ssaTime != time.Millisecond ||
-		sum.budgetHits != 1 || sum.rssByPackage["p"] != 30 {
+		sum.budgetHits != 1 || sum.rssByPackage["p"] != 30 || sum.processTime["p"] != 5*time.Millisecond {
 		t.Fatalf("summary = %+v", sum)
 	}
 

@@ -33,7 +33,7 @@ func TestVerdicts(t *testing.T) {
 	m := measurement{
 		ColdVet: 10 * time.Second, ColdTool: 15 * time.Second,
 		WarmVet: time.Second, WarmTool: time.Second + 50*time.Millisecond,
-		Edit: 250 * time.Millisecond, EditLines: 9_000,
+		Edit: time.Second, EditAnalysis: 250 * time.Millisecond, EditLines: 9_000,
 		MaxRSSRatio: 1.5,
 	}
 
@@ -45,7 +45,7 @@ func TestVerdicts(t *testing.T) {
 		}
 	}
 
-	m.ColdTool, m.WarmTool, m.Edit, m.MaxRSSRatio = 25*time.Second, 2*time.Second, 400*time.Millisecond, 2.5
+	m.ColdTool, m.WarmTool, m.EditAnalysis, m.MaxRSSRatio = 25*time.Second, 2*time.Second, 400*time.Millisecond, 2.5
 
 	for name, got := range map[string]string{
 		"cold": coldVerdict(m), "warm": warmVerdict(m), "edit": editVerdict(m), "rss": rssVerdict(m),
@@ -55,7 +55,7 @@ func TestVerdicts(t *testing.T) {
 		}
 	}
 
-	if editVerdict(measurement{Edit: 500 * time.Millisecond, EditLines: 20_000}) != verdictMet {
+	if editVerdict(measurement{EditAnalysis: 500 * time.Millisecond, EditLines: 20_000}) != verdictMet {
 		t.Error("the edit budget does not scale with package size")
 	}
 
@@ -71,13 +71,14 @@ func TestMarkdownAndJSON(t *testing.T) {
 	rep := report{Date: "2026-10-22", GoVersion: "go1.27.3", Machine: "m", Commit: "abc", Results: []result{{
 		Entry: Entry{Name: "stdlib"},
 		Measurement: measurement{Packages: 3, ColdVet: time.Second, ColdTool: time.Second, AnalyzerTime: 4,
-			SSATime: 1, MaxRSSRatio: 0.5, RSSRatioPackage: "fmt", Edit: time.Second, EditPackage: "x", EditLines: 10},
+			SSATime: 1, MaxRSSRatio: 0.5, RSSRatioPackage: "fmt", RSSRatioTool: 50 << 20, RSSRatioCompile: 100 << 20,
+			Edit: time.Second, EditAnalysis: 200 * time.Millisecond, EditPackage: "x", EditLines: 10},
 	}}}
 
 	rep.Results[0].Measurement.Findings = []finding{{Category: "MS301", Posn: "a.go:1:1", Message: "MS301: buf used"}}
 
 	md := rep.markdown()
-	for _, want := range []string{"### Findings on stdlib", "- `a.go:1:1`: MS301: buf used", "Go go1.27.3 on m, gomemsafe at abc", "| stdlib | 3 | 1.00s | 1.00s | met |", "25.0%", "0.50× (fmt)", "1.00s (x, 10, 0)"} {
+	for _, want := range []string{"### Findings on stdlib", "- `a.go:1:1`: MS301: buf used", "Go go1.27.3 on m, gomemsafe at abc", "| stdlib | 3 | 1.00s | 1.00s | met |", "25.0%", "0.50× (fmt: 50 MB vs 100 MB)", "0.20s of 1.00s (x, 10, 0)"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("markdown lacks %q:\n%s", want, md)
 		}

@@ -73,6 +73,10 @@ func TestRecordAndWrapWriteEvents(t *testing.T) {
 	if e := events[2]; e.Kind != KindSSA || e.Nanos != int64(time.Millisecond) {
 		t.Fatalf("last event = %+v", e)
 	}
+
+	if events[0].Elapsed <= 0 || events[2].Elapsed < events[0].Elapsed {
+		t.Fatalf("elapsed times %d, %d; want positive and growing", events[0].Elapsed, events[2].Elapsed)
+	}
 }
 
 func TestRecordIsANoOpWhenDisabled(t *testing.T) {

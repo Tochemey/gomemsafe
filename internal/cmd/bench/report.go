@@ -39,6 +39,8 @@ const (
 	maxRSSRatio = 2.0
 	// warmSlack absorbs timer noise when comparing two cache-hit runs.
 	warmSlack = 100 * time.Millisecond
+	// bytesPerMB converts peak RSS for the report.
+	bytesPerMB = 1 << 20
 )
 
 // Verdicts, as the report prints them.
@@ -68,7 +70,7 @@ func (r report) markdown() string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "Go %s on %s, gomemsafe at %s, %s.\n\n", r.GoVersion, r.Machine, r.Commit, r.Date)
-	b.WriteString("| Corpus | Packages | Cold vet | Cold gomemsafe | Cold ≤ 2× | Warm vet | Warm gomemsafe | Warm ≤ vet | Edit (package, lines, re-analysed) | Edit budget | Peak RSS vs compile | RSS ≤ 2× | SSA share | Budget hits | Findings |\n")
+	b.WriteString("| Corpus | Packages | Cold vet | Cold gomemsafe | Cold ≤ 2× | Warm vet | Warm gomemsafe | Warm ≤ vet | Edit: analysis of wall (package, lines, re-analysed) | Edit budget | Peak RSS vs compile (package: gomemsafe vs compile) | RSS ≤ 2× | SSA share of analysis | Budget hits | Findings |\n")
 	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 
 	for _, res := range r.Results {
@@ -110,16 +112,17 @@ func warmVerdict(m measurement) string {
 	return verdict(m.WarmTool <= m.WarmVet+warmSlack)
 }
 
-// editVerdict scales the 10 kLOC budget to the edited package's size, never below the budget
-// itself: the go command's own overhead dominates small packages.
+// editVerdict judges the re-analysis of the edited package, not the whole go vet run, whose
+// wall time also covers the go command's own work and the package's recompilation. The 10 kLOC
+// budget scales with the package's size, never below the budget itself.
 func editVerdict(m measurement) string {
-	if m.Edit == 0 {
+	if m.EditAnalysis == 0 {
 		return verdictNA
 	}
 
 	budget := editBudgetPer10kLines * time.Duration(max(1, (m.EditLines+9_999)/10_000))
 
-	return verdict(m.Edit <= budget)
+	return verdict(m.EditAnalysis <= budget)
 }
 
 func rssVerdict(m measurement) string {
@@ -143,7 +146,8 @@ func editCell(m measurement) string {
 		return verdictNA
 	}
 
-	return fmt.Sprintf("%s (%s, %d, %d)", seconds(m.Edit), m.EditPackage, m.EditLines, m.EditReanalysed)
+	return fmt.Sprintf("%s of %s (%s, %d, %d)", seconds(m.EditAnalysis), seconds(m.Edit), m.EditPackage,
+		m.EditLines, m.EditReanalysed)
 }
 
 func rssCell(m measurement) string {
@@ -151,7 +155,8 @@ func rssCell(m measurement) string {
 		return verdictNA
 	}
 
-	return fmt.Sprintf("%.2f× (%s)", m.MaxRSSRatio, m.RSSRatioPackage)
+	return fmt.Sprintf("%.2f× (%s: %d MB vs %d MB)", m.MaxRSSRatio, m.RSSRatioPackage,
+		m.RSSRatioTool/bytesPerMB, m.RSSRatioCompile/bytesPerMB)
 }
 
 func ssaShare(m measurement) string {
