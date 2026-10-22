@@ -1,6 +1,6 @@
 # Reporting Security Issues
 
-At GoAkt, both the core team and community place high importance on addressing security vulnerabilities. We value
+At gomemsafe, both the core team and community place high importance on addressing security vulnerabilities. We value
 responsible disclosure and are committed to recognizing those who help us improve.
 
 If you discover a potential security flaw, please submit it through GitHub using

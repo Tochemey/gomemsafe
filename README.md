@@ -70,8 +70,9 @@ a contract that nothing checks never looks checked.
 | `make fuzz` | Fuzz the directive parser and the vet JSON decoder (`FUZZTIME`, default 30s each) |
 | `make bench-short` | The benchmark on the small generated corpus; CI runs the full corpus (`make bench`) |
 
-The quality bar is [CONSTRAINTS.md](CONSTRAINTS.md), and the rules for contributors and
-agents are in [AGENTS.md](AGENTS.md).
+To contribute, start with [CONTRIBUTING.md](CONTRIBUTING.md). The quality bar is
+[CONSTRAINTS.md](CONSTRAINTS.md), and the coding standards for contributors and agents are in
+[AGENTS.md](AGENTS.md).
 
 ## Architecture
 
