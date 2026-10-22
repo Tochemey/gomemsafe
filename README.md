@@ -9,11 +9,10 @@ catches data-race patterns, misuse of `unsafe` and cgo, use of `sync.Pool` value
 borrowed buffer views after they become invalid, and (for code you annotate)
 use-after-move and escaping borrows. It has zero runtime cost and needs no language change.
 
-> **Status: M0, the first milestone.** One check is implemented end to end: **MS301**, a value
-> used after it was returned to a `sync.Pool`, including through helper functions in other
-> packages. The rest of the catalogue in [docs/design.md](docs/design.md) §5 is planned; its
-> check IDs are reserved, and its directives are recognised and reported as not yet
-> supported.
+> **Status: M0, the first of five [milestones](docs/design.md#10-milestones).** One check is
+> implemented: **MS301**, a value used after it was returned to a `sync.Pool`, including
+> through helper functions in other packages. The other checks in the
+> [check catalogue](docs/design.md#5-check-catalogue) arrive with the later milestones.
 
 ## Quick start
 
