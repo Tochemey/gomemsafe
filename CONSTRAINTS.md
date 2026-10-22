@@ -42,6 +42,7 @@ The quality bar for gomemsafe. Every change must meet it before it is handed ove
 - **edit:** in the edit loop, seconds (`make check-fast`).
 - **task end:** before a task is handed over, at most 90 seconds (`make check-task`).
 - **CI:** on every pull request (`make check-full`), except one that touches only Markdown.
+  CONSTRAINTS.md counts as code, because `make deps` reads its dependency allowlist.
 
 ## Measured, not yet enforced
 
@@ -82,7 +83,7 @@ and nothing is installed.
 | govulncheck | v1.9.0 | `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0` |
 | gitleaks | v8.30.1 | `go run github.com/zricethezav/gitleaks/v8@v8.30.1` |
 | actionlint | v1.7.12 | `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12` |
-| GitHub Actions | checkout v7.0.1, setup-go v7.0.0, upload-artifact v7.0.2, download-artifact v8.0.2, codeql-action v4.39.1, scorecard-action v2.5.0, codecov-action v7.1.1, commitlint-github-action v6.2.1, pr-title-checker v2.0.0 | Pinned by commit SHA in `.github/workflows/`; Renovate proposes updates |
+| GitHub Actions | checkout v7.0.1, setup-go v7.0.0, upload-artifact v7.0.2, download-artifact v8.0.2, codeql-action v4.39.1, scorecard-action v2.5.0, codecov-action v7.1.1, commitlint-github-action v6.2.1, pr-title-checker v2.0.0, paths-filter v4.0.3 | Pinned by commit SHA in `.github/workflows/`; Renovate proposes updates |
 
 ## Not used
 

@@ -90,7 +90,7 @@ add that code to the check's false-positive fixtures (for MS301,
   - CodeQL
 
   A change that touches only Markdown files skips the build and CodeQL; `ci`, commitlint, and
-  the PR title check still report.
+  the PR title check still report. CONSTRAINTS.md is the exception: a change to it builds.
 
 ## Authorship
 

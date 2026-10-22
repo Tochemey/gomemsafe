@@ -18,29 +18,26 @@ jobs:
   changes:
     name: changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # paths-filter lists a pull request's files through the GitHub API.
+      pull-requests: read
     outputs:
-      code: ${{ steps.diff.outputs.code }}
+      code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - id: diff
-        env:
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          # A base that is not in the history (a new branch, a force push) counts as a code
-          # change, so the build runs whenever the change cannot be determined.
-          if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if git diff --name-only "$BASE" HEAD | grep -qv '\.md$'; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          # "code" is true when any changed file is not Markdown. Excluding what cannot affect
+          # the build, instead of listing what can, means a new kind of file builds by default.
+          # CONSTRAINTS.md is the exception: make deps reads its dependency allowlist.
+          filters: |
+            code:
+              - '!**/*.md'
+              - 'CONSTRAINTS.md'
 
   check:
     name: check (Go ${{ matrix.go }})
