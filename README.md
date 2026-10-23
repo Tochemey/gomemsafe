@@ -10,10 +10,11 @@ borrowed buffer views after they become invalid, and (for code you annotate)
 use-after-move and escaping borrows. It has zero runtime cost and needs no language change.
 
 > **Status: M1, the second of five [milestones](docs/design.md#10-milestones), in progress.**
-> Three checks are implemented: **MS301**, a value used after it was returned to a
+> Four checks are implemented: **MS301**, a value used after it was returned to a
 > `sync.Pool`, including through helper functions in other packages; **MS101**, a `uintptr`
-> turned back into a pointer in a way `go vet` cannot see; and **MS103**, a
-> `reflect.SliceHeader` or `StringHeader` value used as memory. The other checks in the
+> turned back into a pointer in a way `go vet` cannot see; **MS103**, a
+> `reflect.SliceHeader` or `StringHeader` value used as memory; and **MS104**, opt-in, an
+> `unsafe` operation without a `// SAFETY:` comment. The other checks in the
 > [check catalogue](docs/design.md#5-check-catalogue) arrive with the later milestones.
 
 ## Quick start
@@ -37,6 +38,7 @@ server.go:42:3: MS301: buf used after it was returned to sync.Pool
 | Command | Description |
 |---|---|
 | `go tool gomemsafe ./...` | Run every check, with Rust-style output. Exits 0 when clean, 1 on findings, 2 on errors. |
+| `go tool gomemsafe -unsafeflow.safety ./...` | Also report `unsafe` operations without a `// SAFETY:` comment (MS104) |
 | `go tool gomemsafe -lifetime=false ./...` | Disable a check (standard vet flag behaviour; `-lifetime` alone runs only that check) |
 | `go tool gomemsafe -json ./...` | Print go vet's JSON output unchanged |
 | `go tool gomemsafe -stats ./...` | Re-run every package and print the time per analyzer, the SSA share, and peak RSS |
@@ -50,7 +52,7 @@ annotation language, with every directive, its scope, and examples, is in
 [docs/design.md §6](docs/design.md#6-annotation-language). The checks each directive enables
 are in the [check catalogue, §5](docs/design.md#5-check-catalogue).
 
-In M0, one directive is enforced:
+One directive is enforced today:
 
 ```go
 //memsafe:allow MS301 the buffer is copied before Put returns
@@ -60,6 +62,14 @@ buf.WriteString(p)
 It suppresses the named checks on its own line and on the next line, and the reason is
 mandatory. The other directives are recognised, but reported as `MS000: not supported yet`, so
 a contract that nothing checks never looks checked.
+
+With `-unsafeflow.safety`, every `unsafe` operation needs a `// SAFETY:` comment on the line
+above its statement, saying why it is safe:
+
+```go
+// SAFETY: b is never written after this point.
+s := unsafe.String(&b[0], len(b))
+```
 
 ## Developing
 

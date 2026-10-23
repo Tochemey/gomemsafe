@@ -44,8 +44,9 @@ func All() []*analysis.Analyzer {
 	return []*analysis.Analyzer{directive.Analyzer, unsafeflow.Analyzer, lifetime.Analyzer}
 }
 
-// Default returns the checks that run when no analyzer is selected. Today that is every check;
-// opt-in checks will be left out of Default.
+// Default returns the checks that run when no analyzer is selected. That is every check: an
+// opt-in check, such as MS104, is an analyzer option that is off unless its flag is set
+// (-unsafeflow.safety).
 func Default() []*analysis.Analyzer {
 	return All()
 }

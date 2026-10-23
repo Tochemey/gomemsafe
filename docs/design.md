@@ -205,7 +205,7 @@ applies, so the command line never mentions tiers.
 | MS101 | A `uintptr` turned back into a pointer without a conversion vet can see: its memory read as a pointer type, or `unsafe.Add` on a nil pointer. Vet's `unsafeptr` already reports every `uintptr`-to-`unsafe.Pointer` conversion outside the allowed forms, so MS101 does not repeat those. An address outside the Go heap (machine code, C or `mmap` memory) is reported too; suppress it with a reason. | `*(*unsafe.Pointer)(unsafe.Pointer(&u))` / `unsafe.Add(nil, u)` |
 | MS102 | A `[]byte` mutated while a live `unsafe.String`/`unsafe.Slice` view of it exists. This breaks string immutability. | `s := unsafe.String(&b[0], n); b[0] = 'x'; use(s)` |
 | MS103 | A `reflect.SliceHeader` / `reflect.StringHeader` value, not a pointer to a real slice or string, whose address is taken as an `unsafe.Pointer`. Its `Data` field is a `uintptr` the garbage collector does not follow, so the slice or string made from it points at memory nothing keeps alive. A header's `Data` read as a pointer is MS103's, not MS101's: correct through a header pointer, this misuse through a header value. | `h := reflect.SliceHeader{Data: d, Len: n, Cap: n}; b := *(*[]byte)(unsafe.Pointer(&h))` |
-| MS104 | *(opt-in: `-unsafeflow.safety`)* An `unsafe` operation without a preceding `// SAFETY:` justification comment (like clippy's `undocumented_unsafe_blocks`) | — |
+| MS104 | *(opt-in: `-unsafeflow.safety`)* An `unsafe` operation without a `// SAFETY:` justification comment (like clippy's `undocumented_unsafe_blocks`). The operations are conversions to or from `unsafe.Pointer` and `unsafe.Add`, `Slice`, `SliceData`, `String`, and `StringData`; `Sizeof`, `Alignof`, and `Offsetof` only compute constants. The comment ends on the line directly above the statement, has a line starting with `SAFETY:` followed by the reason, and covers every operation in that statement. Each line is reported once. Generated files, such as cgo's, are skipped: their justification belongs in the generator. | `t := unsafe.String(&c[0], len(c))` with no comment above it |
 | MS201 | A Go pointer passed to C where the pointed-to memory itself contains Go pointers (a static version of `cgocheck`) | — |
 | MS202 | C memory used after `C.free`, or freed twice, within one function | — |
 | MS203 | `C.CString`/`C.CBytes`/`C.malloc` result not freed on every path and not returned *(warning)* | — |
@@ -260,7 +260,7 @@ code works unchanged.
 | Func | `//memsafe:invalidates <param>` | Ends all outstanding borrows of the parameter |
 | Func | `// +checklocks:<lock>` / `+checklocksread` / `+checklocksacquire` / `+checklocksrelease` / `+checklocksexclude` *(checklocks syntax)* | Lock contract |
 | Line | `//memsafe:allow MS301[,MS302] <reason>` | Suppression on the same or the next line. The reason (rest of the line) is mandatory. |
-| Line | `// SAFETY: <why>` | Justifies the next `unsafe` operation (MS104) |
+| Line | `// SAFETY: <why>` | Justifies the `unsafe` operations of the statement on the next line (MS104). The reason is mandatory. |
 
 ```go
 // Buffer is a reusable byte buffer drawn from a pool.
