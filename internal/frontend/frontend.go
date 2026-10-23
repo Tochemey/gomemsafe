@@ -25,9 +25,9 @@
 //
 // It always asks vet for JSON. In JSON mode the vet tool exits 0 even when it has findings,
 // and the go command caches every run that exits 0, so re-running on a tree with findings is
-// a cache hit (docs/design.md §11). The front-end therefore decides the exit code itself: 0
-// clean, 1 findings, 2 errors, where "errors" includes analyzer failures reported inside the
-// JSON. Test variants of a package repeat its diagnostics, so duplicates are dropped.
+// a cache hit. The front-end therefore decides the exit code itself: 0 clean, 1 findings, 2
+// errors, where "errors" includes analyzer failures reported inside the JSON. Test variants
+// of a package repeat its diagnostics, so duplicates are dropped.
 //
 // The files split by concern: frontend.go runs vet and decodes its output, render.go prints
 // diagnostics with source snippets, and stats.go summarises GOMEMSAFE_TRACE events for

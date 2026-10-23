@@ -29,7 +29,7 @@ import (
 	"time"
 )
 
-// Budgets of docs/design.md §7.1.
+// The performance budgets the benchmark judges.
 const (
 	// maxColdRatio is the cold-run budget: gomemsafe within twice go vet's time.
 	maxColdRatio = 2.0

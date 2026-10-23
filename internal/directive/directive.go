@@ -22,7 +22,7 @@
 
 // Package directive parses //memsafe: comments, once per package, for every check to share.
 //
-// The directive language is documented in docs/design.md §6. Today only allow is enforced:
+// Of the directive language, only allow is enforced today:
 //
 //	//memsafe:allow MS301[,MS302] <reason>
 //
@@ -51,7 +51,7 @@ import (
 
 const prefix = "//memsafe:"
 
-// Directive verbs (docs/design.md §6).
+// The verbs of the directive language.
 const (
 	verbAllow       = "allow"
 	verbStrict      = "strict"

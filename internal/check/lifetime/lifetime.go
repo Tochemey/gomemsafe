@@ -26,9 +26,9 @@
 // someone else.
 //
 // The check reports a use only when the invalidating call ran on every path to it (a must
-// analysis), so findings are almost always real bugs (Tier 1 in docs/design.md §5). It runs
-// only on functions the summary analyzer marked as calling an invalidating function, lowers
-// them to SSA through lazyssa, and asks package invalidation for the uses. Which calls
+// analysis), so findings are almost always real bugs. It runs only on functions the summary
+// analyzer marked as calling an invalidating function, lowers them to SSA through lazyssa,
+// and asks package invalidation for the uses. Which calls
 // invalidate comes from package effect (known library effects) and from summary facts (code
 // that calls those, in any package).
 //

@@ -27,7 +27,7 @@
 // All returns every check; the analyzers each check depends on (directive parsing, the
 // prefilter, lazy SSA, summaries) are pulled in through their Requires fields and need not be
 // listed. To add a check, implement it under internal/check, give it an ID in
-// internal/catalog, and append its analyzer to All. See docs/maintainers.md.
+// internal/catalog, and append its analyzer to All.
 package analyzers
 
 import (

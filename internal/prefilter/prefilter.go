@@ -26,8 +26,7 @@
 // SSA gives call instructions, so checks can map an SSA call back to its source.
 //
 // The summary analyzer uses the callees to decide which functions are worth lowering to SSA
-// at all: most functions call nothing that invalidates, and they are never analysed further
-// (docs/design.md §7.2).
+// at all: most functions call nothing that invalidates, and they are never analysed further.
 package prefilter
 
 import (

@@ -28,9 +28,9 @@
 // edge. Solve computes the fixpoint over the reachable blocks; Walk then replays it,
 // presenting the state before each instruction, which is where checks look for violations.
 //
-// The engine is built for speed (docs/design.md §7): facts are bitsets, blocks are visited
-// from a work list in reverse postorder, buffers are reused between functions so a warm
-// Solve allocates nothing, and a per-function budget ends pathological inputs with Unknown.
+// The engine is built for speed: facts are bitsets, blocks are visited from a work list in
+// reverse postorder, buffers are reused between functions so a warm Solve allocates nothing,
+// and a per-function budget ends pathological inputs with Unknown.
 // Unknown means "no result", and clients must then report nothing.
 package flow
 

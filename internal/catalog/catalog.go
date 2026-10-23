@@ -22,8 +22,8 @@
 
 // Package catalog is the single list of gomemsafe check IDs. An ID such as MS301 is stable:
 // it appears in diagnostics, in //memsafe:allow suppressions, and in users' CI logs, so it is
-// never reused or renumbered. The full catalogue, including checks not implemented yet, is
-// docs/design.md §5.
+// never reused or renumbered. The catalogue holds every ID, including those of checks that are
+// not implemented yet.
 //
 // To add a check, add its ID here first, then implement it under internal/check and register
 // its analyzer in package analyzers.
@@ -43,8 +43,7 @@ const (
 	UseAfterInvalidation ID = "MS301"
 )
 
-// Planned checks. Their IDs are reserved so that code can be annotated ahead of the check;
-// docs/design.md §5 describes each one.
+// Planned checks. Their IDs are reserved so that code can be annotated ahead of the check.
 const (
 	UnsafePointerRoundTrip ID = "MS101"
 	MutatedStringView      ID = "MS102"
