@@ -22,15 +22,14 @@
 
 // Package summary computes, for every function, which of its parameters it invalidates on
 // every path to a normal return, and exports that as a Fact. Callers in other packages read
-// the fact instead of the callee's body, the way Rust's borrow checker trusts signatures
-// (docs/design.md §4.2).
+// the fact instead of the callee's body, the way Rust's borrow checker trusts signatures.
 //
-// It is the only gomemsafe analyzer that exports facts, so it is the only one the go command
-// runs for every dependency (docs/decisions.md D2). Within a package it iterates to a
-// fixpoint, because a function that starts invalidating a parameter can make its callers
-// invalidate theirs. Facts are deterministic: they hold only bitsets, a function that
-// invalidates nothing gets no fact, and a test checks that a body-only edit leaves the facts
-// file byte-identical.
+// It is the only gomemsafe analyzer that exports facts, so it is the only one that does work
+// on every dependency: checks that require it also run there, but return immediately. Within
+// a package it iterates to a fixpoint, because a function that starts invalidating a parameter
+// can make its callers invalidate theirs. Facts are deterministic: they hold only bitsets, a
+// function that invalidates nothing gets no fact, and a test checks that a body-only edit
+// leaves the facts file byte-identical.
 //
 // Result tells checks which function declarations call anything that invalidates
 // (Triggered), and resolves any callee to its invalidated arguments (Invalidates).

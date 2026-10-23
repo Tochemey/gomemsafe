@@ -24,11 +24,12 @@
 // a vet-tool invocation at all, and does this run only compute facts for a dependency (a
 // VetxOnly run)?
 //
-// The second matters for speed. unitchecker also runs, in facts-only runs, every analyzer
-// that requires a fact producer, and every check requires summary. Checks therefore call
-// FactsOnly and return immediately, so dependencies pay only for summaries
-// (docs/design.md §7.2). A test in package frontend fails if unitchecker stops doing this,
-// which is the signal to drop the short-circuit.
+// The second matters for speed. In facts-only runs, unitchecker runs only the analyzers that
+// require a fact producer, and it runs all of them: a check that requires summary still runs
+// on every dependency. Such checks call FactsOnly and return immediately, so dependencies pay
+// only for summaries; checks that require no fact producer are not run on dependencies at all.
+// A test in package frontend fails if unitchecker stops running them, which is the signal to
+// drop the short-circuit.
 package vetmode
 
 import (

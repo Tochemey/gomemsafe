@@ -179,8 +179,8 @@ func TestWalkWithoutSolutionDoesNothing(t *testing.T) {
 	s.Walk(func(ssa.Instruction, *Bitset) { t.Fatal("visited an instruction") })
 }
 
-// BenchmarkSolveLarge solves a function of more than 50,000 instructions; design §7.3 and
-// T4 bound it at 50 ms.
+// BenchmarkSolveLarge solves a function of more than 50,000 instructions, which must take at
+// most 50 ms.
 func BenchmarkSolveLarge(b *testing.B) {
 	var src strings.Builder
 

@@ -23,8 +23,8 @@
 //go:build unix
 
 // Command rsswrap is a go build -toolexec wrapper that records the peak resident set size of
-// every compile. The benchmark (internal/cmd/bench) compares it with gomemsafe's own peak RSS for the same package
-// (docs/design.md §7.1: at most twice the compile).
+// every compile. The benchmark (internal/cmd/bench) compares it with gomemsafe's own peak RSS
+// for the same package, which must stay within twice the compile's.
 //
 // It runs the tool it is given, passes its exit code through, and, when the tool is the
 // compiler and GOMEMSAFE_COMPILE_RSS (trace.CompileRSSEnvVar) names a file, appends one

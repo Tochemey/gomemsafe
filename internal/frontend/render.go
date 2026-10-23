@@ -44,7 +44,7 @@ type position struct {
 // sourceCache reads each source file at most once.
 type sourceCache map[string][]string
 
-// render prints diagnostics in the Rust-like format of docs/design.md §6:
+// render prints diagnostics in a Rust-like format:
 //
 //	file.go:42:3: MS301: buf used after it was returned to sync.Pool
 //	    buf.WriteString(p)

@@ -22,7 +22,7 @@
 
 // Package lazyssa builds a package's SSA form on first request, at most once, and shares it
 // between the analyzers that need it. Packages nobody asks about never pay for SSA, which is
-// the largest single cost of the analysis (docs/design.md §7.2).
+// the largest single cost of the analysis.
 //
 // It mirrors buildssa, without buildssa's dependency on ctrlflow and without eagerly building
 // every package. Builds counts constructions so tests can prove the laziness.

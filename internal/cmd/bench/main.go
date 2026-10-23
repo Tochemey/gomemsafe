@@ -20,10 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Command bench measures gomemsafe against the budgets of docs/design.md §7.1 on a small
-// pinned corpus (corpus.json): two real libraries, zap and GoAkt, each pinned by commit, and a
-// generated corpus that exercises every part of the engine. The corpus stays small enough to
-// run on every CI build.
+// Command bench measures gomemsafe against its performance budgets on a small pinned corpus
+// (corpus.json): two real libraries, zap and GoAkt, each pinned by commit, and a generated
+// corpus that exercises every part of the engine. The corpus stays small enough to run on
+// every CI build.
 //
 //	go run ./internal/cmd/bench [-short] [-corpus zap,goakt,synthetic] [-scenario cold,warm,edit,rss] [-out dir]
 //

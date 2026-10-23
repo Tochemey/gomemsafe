@@ -102,8 +102,10 @@ return bits
 
 - A comment says why, or what a reader cannot see from the code. It never restates the code.
 - Every exported identifier has a doc comment that starts with its name.
-- A comment that explains a subtle choice points at the precedent: "mirrors buildssa",
-  "see docs/design.md §7.2".
+- A comment that explains a subtle choice names its precedent in code, such as "mirrors
+  buildssa". Comments never point into the docs (`docs/design.md §5`, `decision D2`): they
+  state the reason themselves, because a godoc reader does not have the docs at hand and
+  section numbers move.
 - No banner or separator comments (`// ---- Types ----`, `// =====`). Sections of a file are
   separated by the order of declarations and by blank lines, not by decorated comments.
 
