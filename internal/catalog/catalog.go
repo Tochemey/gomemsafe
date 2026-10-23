@@ -41,6 +41,9 @@ const (
 	// UnsafePointerRoundTrip is a uintptr turned back into a pointer in a way go vet's
 	// unsafeptr cannot see.
 	UnsafePointerRoundTrip ID = "MS101"
+	// ReflectHeaderMisuse is a reflect.SliceHeader or reflect.StringHeader value used as
+	// memory, whose Data field the garbage collector does not follow.
+	ReflectHeaderMisuse ID = "MS103"
 	// UseAfterInvalidation is a use of a value after a call took it back, such as a use after
 	// sync.Pool.Put.
 	UseAfterInvalidation ID = "MS301"
@@ -49,7 +52,6 @@ const (
 // Planned checks. Their IDs are reserved so that code can be annotated ahead of the check.
 const (
 	MutatedStringView     ID = "MS102"
-	ReflectHeaderMisuse   ID = "MS103"
 	UnjustifiedUnsafe     ID = "MS104"
 	GoPointerToC          ID = "MS201"
 	UseAfterCFree         ID = "MS202"

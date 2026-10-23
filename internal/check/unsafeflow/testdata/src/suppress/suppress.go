@@ -20,12 +20,22 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package suppress silences MS101 with a reason.
+// Package suppress silences MS101 and MS103 with a reason.
 package suppress
 
-import "unsafe"
+import (
+	"reflect"
+	"unsafe"
+)
 
 func allowed(u uintptr) unsafe.Pointer {
 	//memsafe:allow MS101 u is an address the C library keeps alive
 	return *(*unsafe.Pointer)(unsafe.Pointer(&u))
+}
+
+func allowedHeader(data uintptr, n int) []byte {
+	h := reflect.SliceHeader{Data: data, Len: n, Cap: n}
+
+	//memsafe:allow MS103 data is C memory that the caller frees after the last use
+	return *(*[]byte)(unsafe.Pointer(&h))
 }
