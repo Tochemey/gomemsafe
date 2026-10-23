@@ -10,8 +10,10 @@ borrowed buffer views after they become invalid, and (for code you annotate)
 use-after-move and escaping borrows. It has zero runtime cost and needs no language change.
 
 > **Status: M1, the second of five [milestones](docs/design.md#10-milestones), in progress.**
-> Four checks are implemented: **MS301**, a value used after it was returned to a
-> `sync.Pool`, including through helper functions in other packages; **MS101**, a `uintptr`
+> Five checks are implemented: **MS301**, a value used after it was returned to a
+> `sync.Pool`, including through helper functions in other packages; **MS302**, a view such as
+> the slice from `bytes.Buffer.Bytes` or `bufio.Scanner.Bytes` used after a call on its owner
+> ended it; **MS101**, a `uintptr`
 > turned back into a pointer in a way `go vet` cannot see; **MS103**, a
 > `reflect.SliceHeader` or `StringHeader` value used as memory; and **MS104**, opt-in, an
 > `unsafe` operation without a `// SAFETY:` comment. The other checks in the

@@ -141,7 +141,7 @@ Dependencies are the standard library plus `golang.org/x/tools`
 | `internal/flow` | A shared dataflow engine: sparse tracked values, bitset lattices, a worklist in reverse postorder, and per-function budgets (§7.3). |
 | `internal/check/*` | One analyzer per check family. Each is thin: it defines *sources* (what creates a tracked value), *transfer* rules (what invalidates, moves, or escapes it), and *sinks* (what counts as a violating use). |
 | `internal/frontend` | Front-end mode: runs `go vet -vettool=self -json`, renders diagnostics, decides the exit code. |
-| `internal/invalidation` | The analysis behind MS301 and the summaries: tracks values a call took back through one SSA function, by alias class. |
+| `internal/invalidation` | The analysis behind MS301, MS302, and the summaries: tracks values a call took back, and views a call on their owner ended, through one SSA function, by alias class. |
 | `internal/catalog` | The stable check IDs. |
 | `internal/report` | The one way checks emit diagnostics, honouring `//memsafe:allow`. |
 | `internal/vetmode` | Detects vet-tool invocations and facts-only (`VetxOnly`) runs. |
@@ -210,7 +210,7 @@ applies, so the command line never mentions tiers.
 | MS202 | C memory used after `C.free`, or freed twice, within one function | — |
 | MS203 | `C.CString`/`C.CBytes`/`C.malloc` result not freed on every path and not returned *(warning)* | — |
 | MS301 | Use of a value after `sync.Pool.Put` | `pool.Put(buf); buf.WriteString("x")` |
-| MS302 | Use of a borrowed view after its owner is invalidated | `b := buf.Bytes(); buf.Reset(); use(b)` / `x := sc.Bytes(); sc.Scan(); use(x)` |
+| MS302 | Use of a borrowed view after its owner is invalidated. The views and the calls that end them come from the standard library's documentation: `bytes.Buffer` (`Bytes`, `Next`, `Peek`, `AvailableBuffer`), `bufio.Scanner.Bytes`, `bufio.Reader` (`Peek`, `ReadSlice`, `ReadLine`), and `bufio.Writer.AvailableBuffer`. A call the documentation does not name does not end a view: `bufio.Reader.Peek` after `Peek`, `bytes.Buffer.Grow`, and `Reset` or `Truncate` after any view but `Bytes`. The owner must be the same local variable, parameter, or global at both calls; one loaded from a field, or captured by a function literal, is not followed. A view carried round a loop is followed only when its owner is defined before the loop, and one kept across nested loops is missed. `len` and `cap` are no use. | `b := buf.Bytes(); buf.Reset(); use(b)` / `x := sc.Bytes(); sc.Scan(); use(x)` |
 | MS303 | A borrowed view escapes (to a field, a global, a channel, or a goroutine) while its owner is later reused | `results = append(results, sc.Bytes())` inside a scan loop |
 | MS401 | A variable captured by a goroutine, written on one side and accessed on the other, with no happens-before edge the analyser can recognise (`WaitGroup.Wait`, channel receive, `Mutex`, `errgroup.Wait`) | `go func(){ err = f() }(); if err != nil {…}` |
 | MS402 | A map written in a goroutine and accessed concurrently without synchronisation | — |

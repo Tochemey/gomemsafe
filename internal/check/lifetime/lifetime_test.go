@@ -23,6 +23,7 @@
 package lifetime_test
 
 import (
+	"go/token"
 	"os"
 	"regexp"
 	"strings"
@@ -57,15 +58,8 @@ func TestPointsAtTheValue(t *testing.T) {
 			}
 
 			posn := r.Pass.Fset.Position(d.Pos)
-
-			src, err := os.ReadFile(posn.Filename)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			line := strings.Split(string(src), "\n")[posn.Line-1]
-			if !strings.HasPrefix(line[posn.Column-1:], m[1]) {
-				t.Errorf("%s: points at %q, want the value %s", posn, line[posn.Column-1:], m[1])
+			if got := sourceAt(t, posn); !strings.HasPrefix(got, m[1]) {
+				t.Errorf("%s: points at %q, want the value %s", posn, got, m[1])
 			}
 		}
 	}
@@ -94,4 +88,16 @@ func TestBuildsNoSSAWithoutTriggers(t *testing.T) {
 	if got := lazyssa.Builds() - before; got != 0 {
 		t.Fatalf("built SSA for %d packages, want 0 for a package without invalidating calls", got)
 	}
+}
+
+// sourceAt returns the source text from posn to the end of its line.
+func sourceAt(t *testing.T, posn token.Position) string {
+	t.Helper()
+
+	src, err := os.ReadFile(posn.Filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.Split(string(src), "\n")[posn.Line-1][posn.Column-1:]
 }
