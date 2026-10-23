@@ -92,3 +92,39 @@ func receive() int {
 
 	return <-ch // want `MS301: ch used after it was returned to sync.Pool`
 }
+
+func rangedMap() (n int) {
+	m := map[string]int{"k": 1}
+	pool.Put(m)
+
+	for k := range m { // want `MS301: m used after it was returned to sync.Pool`
+		n += len(k)
+	}
+
+	return n
+}
+
+func stored(h *holder) {
+	b := new(box)
+	pool.Put(b)
+
+	h.b = b // want `MS301: b used after it was returned to sync.Pool`
+}
+
+type holder struct{ b *box }
+
+// storedInto writes through a value returned to the pool: the store is placed at the star,
+// and the diagnostic points at b, not at the value stored.
+func storedInto(zero box) {
+	b := new(box)
+	pool.Put(b)
+
+	*b = zero // want `MS301: b used after it was returned to sync.Pool`
+}
+
+func mapWritten() {
+	m := map[string]int{}
+	pool.Put(m)
+
+	m["k"] = 1 // want `MS301: m used after it was returned to sync.Pool`
+}

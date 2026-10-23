@@ -159,3 +159,14 @@ func methodExpression(r, next *releaser) int {
 type releaser struct{ n int }
 
 func (r *releaser) Release(next *releaser) { pool.Put(r) }
+
+// selectReceive is reported at the select keyword: the receive's channel is not looked up.
+func selectReceive() {
+	ch := make(chan int)
+	pool.Put(ch)
+
+	select { // want `MS301: ch used after it was returned to sync.Pool`
+	case <-ch:
+	default:
+	}
+}

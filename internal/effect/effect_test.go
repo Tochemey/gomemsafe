@@ -26,6 +26,7 @@ import (
 	"go/importer"
 	"go/token"
 	"go/types"
+	"regexp"
 	"testing"
 )
 
@@ -51,6 +52,120 @@ func TestOfIgnoresOtherFunctions(t *testing.T) {
 
 	if _, ok := Of(nil); ok {
 		t.Fatal("Of(nil) found an effect")
+	}
+}
+
+func TestViewOfKnowsTheStandardLibraryViews(t *testing.T) {
+	for _, tc := range []struct {
+		path, typ, name string
+		ended           Event
+	}{
+		{"bytes", "Buffer", "Bytes", Read | Write | Clear},
+		{"bytes", "Buffer", "Next", Read | Write},
+		{"bytes", "Buffer", "Peek", Read | Write},
+		{"bytes", "Buffer", "AvailableBuffer", Write},
+		{"bufio", "Writer", "AvailableBuffer", Write},
+		{"bufio", "Scanner", "Bytes", Read},
+		{"bufio", "Reader", "Peek", Read},
+		{"bufio", "Reader", "ReadSlice", Read},
+		{"bufio", "Reader", "ReadLine", LineRead},
+	} {
+		ended, ok := ViewOf(method(t, tc.path, tc.typ, tc.name))
+		if !ok || ended != tc.ended {
+			t.Errorf("ViewOf(%s.%s.%s) = %b, %v; want %b, true", tc.path, tc.typ, tc.name, ended, ok, tc.ended)
+		}
+	}
+}
+
+func TestEventsOfKnowsTheStandardLibraryEvents(t *testing.T) {
+	for _, tc := range []struct {
+		path, typ, name string
+		events          Event
+	}{
+		{"bytes", "Buffer", "Read", Read},
+		{"bytes", "Buffer", "Next", Read},
+		{"bytes", "Buffer", "WriteTo", Read},
+		{"bytes", "Buffer", "Write", Write},
+		{"bytes", "Buffer", "ReadFrom", Write},
+		{"bytes", "Buffer", "Reset", Clear},
+		{"bytes", "Buffer", "Truncate", Clear},
+		{"bufio", "Scanner", "Scan", Read},
+		{"bufio", "Reader", "ReadSlice", Read},
+		{"bufio", "Reader", "ReadLine", Read | LineRead},
+		{"bufio", "Writer", "WriteString", Write},
+	} {
+		if events := EventsOf(method(t, tc.path, tc.typ, tc.name)); events != tc.events {
+			t.Errorf("EventsOf(%s.%s.%s) = %b, want %b", tc.path, tc.typ, tc.name, events, tc.events)
+		}
+	}
+}
+
+// TestCallsTheDocumentationLeavesOutHaveNoEffect covers methods that read state without
+// changing the buffer, and those the documentation does not say end a view.
+func TestCallsTheDocumentationLeavesOutHaveNoEffect(t *testing.T) {
+	for _, tc := range []struct{ path, typ, name string }{
+		{"bytes", "Buffer", "Len"},
+		{"bytes", "Buffer", "String"},
+		{"bytes", "Buffer", "Peek"},
+		{"bytes", "Buffer", "Grow"},
+		{"bytes", "Buffer", "UnreadByte"},
+		{"bufio", "Scanner", "Text"},
+		{"bufio", "Scanner", "Buffer"},
+		{"bufio", "Reader", "Peek"},
+		{"bufio", "Reader", "Discard"},
+		{"bufio", "Reader", "WriteTo"},
+		{"bufio", "Reader", "Reset"},
+		{"bufio", "Writer", "Flush"},
+	} {
+		if events := EventsOf(method(t, tc.path, tc.typ, tc.name)); events != 0 {
+			t.Errorf("EventsOf(%s.%s.%s) = %b, want none", tc.path, tc.typ, tc.name, events)
+		}
+	}
+
+	for _, tc := range []struct{ path, typ, name string }{
+		{"bytes", "Buffer", "String"},
+		{"bytes", "Buffer", "ReadBytes"},
+		{"bufio", "Scanner", "Text"},
+		{"bufio", "Reader", "ReadBytes"},
+	} {
+		if _, ok := ViewOf(method(t, tc.path, tc.typ, tc.name)); ok {
+			t.Errorf("ViewOf(%s.%s.%s) found a view; the result is a copy", tc.path, tc.typ, tc.name)
+		}
+	}
+
+	if _, ok := ViewOf(nil); ok || EventsOf(nil) != 0 {
+		t.Error("nil has an effect")
+	}
+}
+
+// TestEveryEntryNamesARealMethod resolves every key of the tables, so that a misspelt name
+// cannot silently match nothing.
+func TestEveryEntryNamesARealMethod(t *testing.T) {
+	fullName := regexp.MustCompile(`^\(\*(\w+)\.(\w+)\)\.(\w+)$`)
+
+	var names []string
+	for name := range known {
+		names = append(names, name)
+	}
+
+	for name := range views {
+		names = append(names, name)
+	}
+
+	for name := range events {
+		names = append(names, name)
+	}
+
+	for _, name := range names {
+		m := fullName.FindStringSubmatch(name)
+		if m == nil {
+			t.Errorf("%q is not a pointer method's full name", name)
+			continue
+		}
+
+		if got := method(t, m[1], m[2], m[3]).FullName(); got != name {
+			t.Errorf("%q resolves to %q", name, got)
+		}
 	}
 }
 

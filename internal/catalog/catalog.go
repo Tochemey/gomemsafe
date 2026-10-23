@@ -50,6 +50,9 @@ const (
 	// UseAfterInvalidation is a use of a value after a call took it back, such as a use after
 	// sync.Pool.Put.
 	UseAfterInvalidation ID = "MS301"
+	// UseOfInvalidatedView is a use of a view, such as the slice from bytes.Buffer.Bytes, after
+	// a call on its owner ended it.
+	UseOfInvalidatedView ID = "MS302"
 )
 
 // Planned checks. Their IDs are reserved so that code can be annotated ahead of the check.
@@ -58,7 +61,6 @@ const (
 	GoPointerToC          ID = "MS201"
 	UseAfterCFree         ID = "MS202"
 	CAllocationLeak       ID = "MS203"
-	UseOfInvalidatedView  ID = "MS302"
 	EscapingBorrowedView  ID = "MS303"
 	UnsynchronizedCapture ID = "MS401"
 	ConcurrentMapAccess   ID = "MS402"

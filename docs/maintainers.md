@@ -19,7 +19,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
                       ├─ prefilter    which function calls which static callee
                       ├─ lazyssa      SSA for the package, built only if asked
                       ├─ summary      per-function Invalidates facts → .vetx (all packages)
-                      └─ checks       lifetime (MS301), skipped in facts-only runs;
+                      └─ checks       lifetime (MS301, MS302), skipped in facts-only runs;
                                       unsafeflow (MS101, MS103; MS104 with -unsafeflow.safety), not run in facts-only runs
                            └─ lifetime: invalidation + flow, must-dataflow on SSA
                            └─ report: emits diagnostics, honouring //memsafe:allow
@@ -32,22 +32,22 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 |---|---|---|
 | `analyzers` | Public API: `All()`, `Default()` | checks, directive |
 | `cmd/gomemsafe` | The binary; picks front-end or vet-tool mode | analyzers, frontend, trace, vetmode |
-| `internal/catalog` | The stable check IDs (`MS301`, …), implemented and planned | — |
-| `internal/check/lifetime` | MS301, use after invalidation | engine packages, report |
+| `internal/catalog` | The stable check IDs (`MS301`, …), implemented and planned | none |
+| `internal/check/lifetime` | MS301, use after invalidation; MS302, a view used after its owner ended it | engine packages, report |
 | `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it; MS103, a reflect header value used as memory; MS104 (opt-in), an unsafe operation without a `// SAFETY:` comment | catalog, directive, report |
 | `internal/cmd/bench` | Development command: the benchmark harness (design §7.1) | frontend, trace |
 | `internal/cmd/rsswrap` | Development command: `-toolexec` wrapper recording each compile's peak RSS | trace |
 | `internal/directive` | `//memsafe:` parsing; MS000 | catalog, vetmode |
-| `internal/flow` | Must-dataflow engine over SSA | — |
+| `internal/flow` | Must-dataflow engine over SSA | none |
 | `internal/frontend` | Runs vet, decodes its JSON (`Decode`), renders, exit codes, `-stats` | trace |
-| `internal/effect` | Known effects of library calls (`sync.Pool.Put`) | — |
-| `internal/invalidation` | Tracks invalidated values through one function | effect, flow |
+| `internal/effect` | Known effects of library calls: invalidations (`sync.Pool.Put`), and the standard library's views and the events that end them | none |
+| `internal/invalidation` | Tracks invalidated values, and views that were ended, through one function | effect, flow |
 | `internal/lazyssa` | Builds SSA on demand, once | trace |
-| `internal/prefilter` | Static callees per function; calls by position | — |
+| `internal/prefilter` | Static callees per function; calls by position | none |
 | `internal/report` | The one way checks emit diagnostics | directive |
 | `internal/summary` | Invalidates facts, the only fact producer | effect, invalidation, lazyssa, prefilter |
 | `internal/trace` | `GOMEMSAFE_TRACE` timing events | vetmode |
-| `internal/vetmode` | Vet-tool invocation and facts-only detection | — |
+| `internal/vetmode` | Vet-tool invocation and facts-only detection | none |
 
 The engine packages (`directive`, `prefilter`, `lazyssa`, `flow`, `invalidation`, `summary`,
 `effect`) never import a check or the front-end. `depguard` enforces this
@@ -57,16 +57,23 @@ The engine packages (`directive`, `prefilter`, `lazyssa`, `flow`, `invalidation`
 
 ### Teach gomemsafe about another invalidating function
 
-For example, `bufio.Scanner.Scan` invalidating the slice from a previous `Bytes` call.
+There are two kinds of effect, both in `internal/effect/effect.go`, keyed by the callee's full
+name as `types.Func.FullName` prints it, declared as a constant.
 
-1. Add its full name (as `types.Func.FullName` prints it) and an `Effect` constant in
-   `internal/effect/effect.go`, then an `Invalidation` entry in `known`. Argument indexes count the
-   receiver as 0.
-2. Test it with `effect.Of` in `internal/effect/effect_test.go`.
-3. Add positive cases and look-alike negative cases to the fixtures under
+- **An invalidation** takes an argument back, like `sync.Pool.Put`: add an `Invalidation` entry
+  to `known`. Argument indexes count the receiver as 0. Functions that only *call* such a
+  function need nothing: `summary` derives their facts.
+- **A view** is a result that points into the receiver's buffer, like `bufio.Scanner.Bytes`:
+  add it to `views` with the events that end it, and add the calls that are those events, like
+  `bufio.Scanner.Scan`, to `events`. Quote the documentation sentence each entry relies on.
+  When the documentation does not say a call ends a view, leave the call out.
+
+Then:
+
+1. Test the entry in `internal/effect/effect_test.go`, with `effect.Of`, `effect.ViewOf`, or
+   `effect.EventsOf`.
+2. Add positive cases and look-alike negative cases to the fixtures under
    `internal/check/lifetime/testdata/src`.
-
-Functions that only *call* such a function need nothing: `summary` derives their facts.
 
 ### Add a check
 

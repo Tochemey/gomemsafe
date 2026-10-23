@@ -90,6 +90,12 @@ func releasesAll(x *int, y int) { release(x) }
 
 func resliced(s []byte) byte { release(s[:0]); return s[0] }
 
+func lengthAfterRelease(s []byte) int { release(s); return len(s) }
+
+var g int
+
+func global() { release(&g); use(&g) }
+
 func copied(n int, s string, b box) { release(n); release(s); release(b) }
 
 func generic[T any](v T) T { release(v); return v }
@@ -104,7 +110,7 @@ func methodValue(r releaser, x *int) { f := r.free; f(x); use(x) }
 func TestUsesFindUseAfterInvalidation(t *testing.T) {
 	pkg := build(t)
 
-	for _, name := range []string{"straight", "viaInterface", "bothPhi", "commaOk", "resliced"} {
+	for _, name := range []string{"straight", "viaInterface", "bothPhi", "commaOk", "resliced", "lengthAfterRelease", "global"} {
 		a := analyze(t, pkg, name)
 
 		uses := a.Uses()
@@ -115,6 +121,10 @@ func TestUsesFindUseAfterInvalidation(t *testing.T) {
 
 		if uses[0].Site.Callee.Name() != "release" || uses[0].Arg != 0 {
 			t.Errorf("%s: use attributed to %s argument %d", name, uses[0].Site.Callee.Name(), uses[0].Arg)
+		}
+
+		if uses[0].View != nil {
+			t.Errorf("%s: a use after an invalidation has a view", name)
 		}
 	}
 }
@@ -205,31 +215,6 @@ func TestInvalidAtReturn(t *testing.T) {
 	}
 }
 
-func TestBaseStripsConversionsThatKeepTheMemory(t *testing.T) {
-	pkg := build(t)
-
-	for _, name := range []string{"viaInterface", "resliced"} {
-		fn := pkg.Func(name)
-		param := fn.Params[0]
-
-		for _, b := range fn.Blocks {
-			for _, instr := range b.Instrs {
-				v, ok := instr.(ssa.Value)
-				if !ok {
-					continue
-				}
-
-				switch v.(type) {
-				case *ssa.MakeInterface, *ssa.TypeAssert, *ssa.Slice:
-					if got := invalidation.Base(v); got != param {
-						t.Errorf("%s: Base(%s) = %s, want the parameter", name, v.Name(), got.Name())
-					}
-				}
-			}
-		}
-	}
-}
-
 func lookup(fn *types.Func) effect.ArgSet {
 	switch fn.Name() {
 	case "release", "free":
@@ -255,14 +240,24 @@ func analyze(t *testing.T, pkg *ssa.Package, name string) *invalidation.Analysis
 func build(t *testing.T) *ssa.Package {
 	t.Helper()
 
+	return buildSource(t, src)
+}
+
+// buildSource builds package p from source. Imports are type-checked from source too, so the
+// test needs no export data.
+func buildSource(t *testing.T, source string) *ssa.Package {
+	t.Helper()
+
 	fset := token.NewFileSet()
 
-	file, err := parser.ParseFile(fset, "p.go", src, parser.SkipObjectResolution)
+	file, err := parser.ParseFile(fset, "p.go", source, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	pkg, _, err := ssautil.BuildPackage(&types.Config{Importer: importer.Default()}, fset,
+	imports := importer.ForCompiler(fset, "source", nil)
+
+	pkg, _, err := ssautil.BuildPackage(&types.Config{Importer: imports}, fset,
 		types.NewPackage("p", "p"), []*ast.File{file}, ssa.BuilderMode(0))
 	if err != nil {
 		t.Fatal(err)

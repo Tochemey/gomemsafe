@@ -36,11 +36,15 @@
 // whether memory is shared. Their uses inside the generic body are not reported, because an
 // instantiation may be a plain value.
 //
-// Values are grouped into alias classes: a value and everything that is the same memory under
-// another type or length (interface conversions, type assertions, type changes, reslices).
+// Values are grouped into alias classes (file classes.go): a value and everything that is the
+// same memory under another type or length (interface conversions, type assertions, type
+// changes, reslices).
 // Invalidating any member invalidates the class. A phi node starts its own class and is invalid only if every incoming
 // value was invalid on its edge. Values loaded from memory (fields, address-taken variables)
 // are not tracked: Tier 1 may miss such bugs, but never reports a false one.
+//
+// AnalyzeWithViews also tracks views (file views.go): results that point into a receiver's
+// buffer, made invalid by a later call on that receiver.
 //
 // Analyze builds the problem and solves it with package flow; Uses lists violations for
 // checks, and InvalidAtReturn lists invalidated parameters for summaries.
@@ -75,6 +79,9 @@ type Use struct {
 	Site Site
 	// Arg is the invalidated call-argument index at Site.
 	Arg int
+	// View is the view the used value came from when Site ended that view (MS302). It is nil
+	// for a use after an invalidation (MS301).
+	View *View
 }
 
 // Analysis is the solved invalidation problem for one function.
@@ -84,29 +91,70 @@ type Analysis struct {
 
 	classOf map[ssa.Value]int
 	bases   []ssa.Value
-	// siteClasses[i] lists the classes Sites[i] invalidates.
+	// siteClasses[i] lists the classes Sites[i] invalidates, and siteArgs[i] the call argument
+	// that holds each of them. endsViews[i] is set when Sites[i] ends views rather than taking
+	// its arguments back.
 	siteClasses [][]int
-	siteOf      map[*ssa.Call]int
+	siteArgs    [][]int
+	endsViews   []bool
+	// siteOf lists the sites of each call: a call can both invalidate and end views.
+	siteOf map[*ssa.Call][]int
+	views  []View
+	// viewClasses maps each class that is a view to what it views: the classes of view calls,
+	// and phis of them.
+	viewClasses map[int]viewClass
+	// fieldOwners maps each field held by value to the first address of it, the owner that
+	// stands for every other address of the same field (ownerOf).
+	fieldOwners map[fieldKey]ssa.Value
 	solution    flow.Solution
 }
 
 // Analyze solves the problem for fn. It returns nil when fn contains no invalidating call or
 // when the engine's budget runs out; either way there is nothing to report.
 func Analyze(fn *ssa.Function, lookup Lookup, eng *flow.Engine) *Analysis {
-	a := &Analysis{Fn: fn, classOf: make(map[ssa.Value]int), siteOf: make(map[*ssa.Call]int)}
+	return analyze(fn, lookup, eng, false)
+}
+
+// AnalyzeWithViews is Analyze that also tracks views: see View.
+func AnalyzeWithViews(fn *ssa.Function, lookup Lookup, eng *flow.Engine) *Analysis {
+	return analyze(fn, lookup, eng, true)
+}
+
+func analyze(fn *ssa.Function, lookup Lookup, eng *flow.Engine, withViews bool) *Analysis {
+	a := &Analysis{
+		Fn:      fn,
+		classOf: make(map[ssa.Value]int),
+		siteOf:  make(map[*ssa.Call][]int),
+	}
+
+	var calls []*ssa.Call
+
 	for _, b := range fn.Blocks {
 		for _, instr := range b.Instrs {
 			if call, ok := instr.(*ssa.Call); ok {
+				calls = append(calls, call)
 				a.addSite(call, lookup)
 			}
 		}
 	}
 
-	if len(a.Sites) == 0 {
+	if withViews {
+		a.addViews(calls)
+	}
+
+	if len(a.Sites) == 0 && len(a.views) == 0 {
 		return nil
 	}
 
 	a.closeOverAliases()
+
+	if withViews {
+		a.endViews(calls)
+	}
+
+	if len(a.Sites) == 0 {
+		return nil
+	}
 
 	sol, outcome := eng.Solve(fn, a)
 	if outcome != flow.Solved {
@@ -116,38 +164,6 @@ func Analyze(fn *ssa.Function, lookup Lookup, eng *flow.Engine) *Analysis {
 	a.solution = sol
 
 	return a
-}
-
-// Base strips conversions and reslices that keep the same memory, returning the value they
-// started from.
-func Base(v ssa.Value) ssa.Value {
-	for {
-		switch x := v.(type) {
-		case *ssa.MakeInterface:
-			v = x.X
-		case *ssa.Slice:
-			v = x.X
-		case *ssa.ChangeType:
-			v = x.X
-		case *ssa.ChangeInterface:
-			v = x.X
-		case *ssa.TypeAssert:
-			if x.CommaOk {
-				return v
-			}
-
-			v = x.X
-		case *ssa.Extract:
-			ta, ok := x.Tuple.(*ssa.TypeAssert)
-			if !ok || x.Index != 0 {
-				return v
-			}
-
-			v = ta.X
-		default:
-			return v
-		}
-	}
 }
 
 // N implements flow.Problem.
@@ -186,20 +202,22 @@ func (a *Analysis) Phi(phi *ssa.Phi, edge func(int) *flow.Bitset, state *flow.Bi
 	state.Clear(c)
 }
 
-// Transfer implements flow.Problem: redefining a class's base revalidates the class, and an
-// invalidating call invalidates the classes of its arguments.
+// Transfer implements flow.Problem: an invalidating call invalidates the classes of its
+// arguments, then redefining a class's base revalidates the class. The order matters for a call
+// that ends its receiver's views and returns a new one, such as a second bytes.Buffer.Next: the
+// new view is valid.
 func (a *Analysis) Transfer(instr ssa.Instruction, state *flow.Bitset) {
-	if v, ok := instr.(ssa.Value); ok {
-		if c, tracked := a.classOf[v]; tracked && a.bases[c] == v {
-			state.Clear(c)
-		}
-	}
-
 	if call, ok := instr.(*ssa.Call); ok {
-		if i, isSite := a.siteOf[call]; isSite {
+		for _, i := range a.siteOf[call] {
 			for _, c := range a.siteClasses[i] {
 				state.Set(c)
 			}
+		}
+	}
+
+	if v, ok := instr.(ssa.Value); ok {
+		if c, tracked := a.classOf[v]; tracked && a.bases[c] == v {
+			state.Clear(c)
 		}
 	}
 }
@@ -227,10 +245,22 @@ func (a *Analysis) Uses() []Use {
 				continue
 			}
 
-			site, arg := a.siteFor(c, instr.Pos())
+			site, arg, source := a.siteFor(c, instr.Pos())
+
+			var view *View
+
+			if a.endsViews[site] {
+				if readsOnlyLength(instr) {
+					continue
+				}
+
+				// A site that ends views lists only classes that hold one.
+				view = &a.views[a.viewClasses[source].view]
+			}
+
 			reported[c] = true
 
-			out = append(out, Use{Instr: instr, Value: *op, Site: site, Arg: arg})
+			out = append(out, Use{Instr: instr, Value: *op, Site: a.Sites[site], Arg: arg, View: view})
 		}
 	})
 
@@ -310,117 +340,43 @@ func (a *Analysis) addSite(call *ssa.Call, lookup Lookup) {
 		return
 	}
 
-	a.siteOf[call] = len(a.Sites)
+	a.addSiteClasses(site, classes, site.Args, false)
+}
+
+// addSiteClasses records site as invalidating classes; args[i] is the call argument that holds
+// classes[i]. endsViews tells a site that ends views from one that takes its arguments back.
+func (a *Analysis) addSiteClasses(site Site, classes, args []int, endsViews bool) {
+	a.siteOf[site.Call] = append(a.siteOf[site.Call], len(a.Sites))
 	a.Sites = append(a.Sites, site)
 	a.siteClasses = append(a.siteClasses, classes)
+	a.siteArgs = append(a.siteArgs, args)
+	a.endsViews = append(a.endsViews, endsViews)
 }
 
-// class returns the class whose base is v, creating it if needed.
-func (a *Analysis) class(v ssa.Value) int {
-	if c, ok := a.classOf[v]; ok {
-		return c
-	}
+// siteFor returns the index of the invalidating site of class c that is closest before pos, or
+// of the first one when none precedes it (for example, a site earlier in a loop), the argument
+// that held c there, and the class the site invalidates: c, or for a phi class, which has no
+// site of its own, a class flowing into it. Every invalid class traces back to at least one
+// site, because only sites invalidate, so when no earlier source class has a site, the last one
+// does.
+func (a *Analysis) siteFor(c int, pos token.Pos) (int, int, int) {
+	sources := a.sourceClasses(c)
+	last := sources[len(sources)-1]
 
-	c := len(a.bases)
-	a.bases = append(a.bases, v)
-	a.classOf[v] = c
-
-	return c
-}
-
-// closeOverAliases adds to each class every value derived from its members by a
-// pointer-preserving conversion, and gives each phi fed by a tracked value its own class.
-func (a *Analysis) closeOverAliases() {
-	work := append([]ssa.Value(nil), a.bases...)
-	for len(work) > 0 {
-		v := work[len(work)-1]
-		work = work[:len(work)-1]
-		c := a.classOf[v]
-
-		for _, r := range referrersOf(v) {
-			derived, ok := r.(ssa.Value)
-			if !ok {
-				continue
-			}
-
-			if _, seen := a.classOf[derived]; seen {
-				continue
-			}
-
-			work = a.addDerived(derived, c, work)
-		}
-	}
-}
-
-// addDerived puts derived, a referrer of a member of class c, into the right class and returns
-// the work list extended with the values whose referrers must be visited next.
-func (a *Analysis) addDerived(derived ssa.Value, c int, work []ssa.Value) []ssa.Value {
-	switch d := derived.(type) {
-	case *ssa.Phi:
-		a.class(d)
-		return append(work, d)
-	case *ssa.TypeAssert:
-		a.classOf[d] = c
-		if !d.CommaOk {
-			return append(work, d)
-		}
-
-		for _, r := range referrersOf(d) {
-			if ex, ok := r.(*ssa.Extract); ok && ex.Index == 0 {
-				a.classOf[ex] = c
-				work = append(work, ex)
-			}
-		}
-
-		return work
-	case *ssa.MakeInterface, *ssa.ChangeType, *ssa.ChangeInterface, *ssa.Slice:
-		a.classOf[d] = c
-		return append(work, d)
-	}
-
-	return work
-}
-
-// siteFor returns the invalidating site of class c that is closest before pos, or the first
-// one when none precedes it (for example, a site earlier in a loop). A phi class has no site of
-// its own; it takes the site of a class flowing into it. Every invalid class traces back to at
-// least one site, because only sites invalidate.
-func (a *Analysis) siteFor(c int, pos token.Pos) (Site, int) {
-	for _, class := range a.sourceClasses(c) {
+	for _, class := range sources[:len(sources)-1] {
 		if site, arg, ok := a.nearestSite(class, pos); ok {
-			return site, arg
+			return site, arg, class
 		}
 	}
 
-	return a.Sites[0], a.Sites[0].Args[0]
+	site, arg, _ := a.nearestSite(last, pos)
+
+	return site, arg, last
 }
 
-// sourceClasses returns c followed by the classes that flow into it through phis, nearest
-// first.
-func (a *Analysis) sourceClasses(c int) []int {
-	order := []int{c}
-	seen := map[int]bool{c: true}
-
-	for i := 0; i < len(order); i++ {
-		phi, ok := a.bases[order[i]].(*ssa.Phi)
-		if !ok {
-			continue
-		}
-
-		for _, v := range phi.Edges {
-			if ec, tracked := a.classOf[v]; tracked && !seen[ec] {
-				seen[ec] = true
-				order = append(order, ec)
-			}
-		}
-	}
-
-	return order
-}
-
-// nearestSite returns the site invalidating class c that is closest before pos, or the first
-// such site when none precedes pos.
-func (a *Analysis) nearestSite(c int, pos token.Pos) (Site, int, bool) {
+// nearestSite returns the index of the site invalidating class c that is closest before pos,
+// or of the first such site when none precedes pos.
+func (a *Analysis) nearestSite(c int, pos token.Pos) (int, int, bool) {
 	best, bestArg := -1, -1
 	first, firstArg := -1, -1
 
@@ -431,12 +387,12 @@ func (a *Analysis) nearestSite(c int, pos token.Pos) (Site, int, bool) {
 			}
 
 			if first < 0 {
-				first, firstArg = i, a.Sites[i].Args[j]
+				first, firstArg = i, a.siteArgs[i][j]
 			}
 
 			p := a.Sites[i].Call.Pos()
 			if p < pos && (best < 0 || p > a.Sites[best].Call.Pos()) {
-				best, bestArg = i, a.Sites[i].Args[j]
+				best, bestArg = i, a.siteArgs[i][j]
 			}
 		}
 	}
@@ -446,10 +402,10 @@ func (a *Analysis) nearestSite(c int, pos token.Pos) (Site, int, bool) {
 	}
 
 	if best < 0 {
-		return Site{}, 0, false
+		return 0, 0, false
 	}
 
-	return a.Sites[best], bestArg, true
+	return best, bestArg, true
 }
 
 // staticCallee returns the function a call statically dispatches to, when the call's
@@ -498,14 +454,6 @@ func sharesMemory(t types.Type) bool {
 	return false
 }
 
-func referrersOf(v ssa.Value) []ssa.Instruction {
-	if refs := v.Referrers(); refs != nil {
-		return *refs
-	}
-
-	return nil
-}
-
 func isUse(instr ssa.Instruction) bool {
 	switch x := instr.(type) {
 	case *ssa.MakeInterface, *ssa.ChangeType, *ssa.ChangeInterface, *ssa.TypeAssert,
@@ -518,17 +466,17 @@ func isUse(instr ssa.Instruction) bool {
 	return true
 }
 
+func isNilConst(v ssa.Value) bool {
+	c, ok := v.(*ssa.Const)
+	return ok && c.IsNil()
+}
+
 func isNilComparison(op *ssa.BinOp) bool {
 	if op.Op != token.EQL && op.Op != token.NEQ {
 		return false
 	}
 
-	isNil := func(v ssa.Value) bool {
-		c, ok := v.(*ssa.Const)
-		return ok && c.IsNil()
-	}
-
-	return isNil(op.X) || isNil(op.Y)
+	return isNilConst(op.X) || isNilConst(op.Y)
 }
 
 func isTypeParam(t types.Type) bool {
