@@ -54,3 +54,88 @@ func TestBaseStripsConversionsThatKeepTheMemory(t *testing.T) {
 		}
 	}
 }
+
+// baseSrc has a value of each kind that Base either strips or keeps.
+const baseSrc = `package p
+
+import "io"
+
+func pair() (*int, error) { return nil, nil }
+
+func changeInterface(rw io.ReadWriter) io.Reader { return rw }
+
+func commaOk(i any) (*int, bool) { x, ok := i.(*int); return x, ok }
+
+func callResult() *int { x, _ := pair(); return x }
+`
+
+// TestBaseStripsOnlyTheSameMemory covers each kind of value Base looks at: an interface
+// conversion and the value of a comma-ok assertion are the same memory as their operand, while
+// the comma-ok assertion itself, its ok result, and a call's result are values of their own.
+func TestBaseStripsOnlyTheSameMemory(t *testing.T) {
+	pkg := buildSource(t, baseSrc)
+
+	for _, tc := range []struct {
+		fn   string
+		want func(v ssa.Value, fn *ssa.Function) ssa.Value
+		kind func(ssa.Value) bool
+	}{
+		{"changeInterface", param, isChangeInterface},
+		{"commaOk", param, isFirstOfAssertion},
+		{"commaOk", itself, isCommaOkAssertion},
+		{"commaOk", itself, isSecondOfAssertion},
+		{"callResult", itself, isExtractOfCall},
+	} {
+		fn := pkg.Func(tc.fn)
+		found := false
+
+		for _, b := range fn.Blocks {
+			for _, instr := range b.Instrs {
+				v, ok := instr.(ssa.Value)
+				if !ok || !tc.kind(v) {
+					continue
+				}
+
+				found = true
+
+				if got, want := invalidation.Base(v), tc.want(v, fn); got != want {
+					t.Errorf("%s: Base(%s) = %s, want %s", tc.fn, v, got, want)
+				}
+			}
+		}
+
+		if !found {
+			t.Errorf("%s: no value of the kind under test", tc.fn)
+		}
+	}
+}
+
+func param(_ ssa.Value, fn *ssa.Function) ssa.Value { return fn.Params[0] }
+
+func itself(v ssa.Value, _ *ssa.Function) ssa.Value { return v }
+
+func isChangeInterface(v ssa.Value) bool {
+	_, ok := v.(*ssa.ChangeInterface)
+	return ok
+}
+
+func isCommaOkAssertion(v ssa.Value) bool {
+	ta, ok := v.(*ssa.TypeAssert)
+	return ok && ta.CommaOk
+}
+
+func isFirstOfAssertion(v ssa.Value) bool { return isExtractOf(v, 0, isCommaOkAssertion) }
+
+func isSecondOfAssertion(v ssa.Value) bool { return isExtractOf(v, 1, isCommaOkAssertion) }
+
+func isExtractOfCall(v ssa.Value) bool {
+	return isExtractOf(v, 0, func(t ssa.Value) bool {
+		_, ok := t.(*ssa.Call)
+		return ok
+	})
+}
+
+func isExtractOf(v ssa.Value, index int, tuple func(ssa.Value) bool) bool {
+	ex, ok := v.(*ssa.Extract)
+	return ok && ex.Index == index && tuple(ex.Tuple)
+}

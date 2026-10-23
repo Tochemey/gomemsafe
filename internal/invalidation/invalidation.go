@@ -357,15 +357,21 @@ func (a *Analysis) addSiteClasses(site Site, classes, args []int, endsViews bool
 // of the first one when none precedes it (for example, a site earlier in a loop), the argument
 // that held c there, and the class the site invalidates: c, or for a phi class, which has no
 // site of its own, a class flowing into it. Every invalid class traces back to at least one
-// site, because only sites invalidate.
+// site, because only sites invalidate, so when no earlier source class has a site, the last one
+// does.
 func (a *Analysis) siteFor(c int, pos token.Pos) (int, int, int) {
-	for _, class := range a.sourceClasses(c) {
+	sources := a.sourceClasses(c)
+	last := sources[len(sources)-1]
+
+	for _, class := range sources[:len(sources)-1] {
 		if site, arg, ok := a.nearestSite(class, pos); ok {
 			return site, arg, class
 		}
 	}
 
-	return 0, a.siteArgs[0][0], a.siteClasses[0][0]
+	site, arg, _ := a.nearestSite(last, pos)
+
+	return site, arg, last
 }
 
 // nearestSite returns the index of the site invalidating class c that is closest before pos,

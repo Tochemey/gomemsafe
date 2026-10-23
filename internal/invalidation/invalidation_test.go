@@ -92,6 +92,10 @@ func resliced(s []byte) byte { release(s[:0]); return s[0] }
 
 func lengthAfterRelease(s []byte) int { release(s); return len(s) }
 
+var g int
+
+func global() { release(&g); use(&g) }
+
 func copied(n int, s string, b box) { release(n); release(s); release(b) }
 
 func generic[T any](v T) T { release(v); return v }
@@ -106,7 +110,7 @@ func methodValue(r releaser, x *int) { f := r.free; f(x); use(x) }
 func TestUsesFindUseAfterInvalidation(t *testing.T) {
 	pkg := build(t)
 
-	for _, name := range []string{"straight", "viaInterface", "bothPhi", "commaOk", "resliced", "lengthAfterRelease"} {
+	for _, name := range []string{"straight", "viaInterface", "bothPhi", "commaOk", "resliced", "lengthAfterRelease", "global"} {
 		a := analyze(t, pkg, name)
 
 		uses := a.Uses()
