@@ -39,15 +39,23 @@ var lengthBuiltins = map[string]bool{"len": true, "cap": true}
 // bytes.Buffer.Bytes (package effect). The view is invalid after a later call on the same
 // receiver whose events end it, such as bytes.Buffer.Reset.
 //
-// The receiver must be the same SSA value at both calls: a local variable, a parameter, or a
-// global. A receiver loaded from memory at each call, such as a field or a variable that a
-// function literal captures, is not followed: the variable could be reassigned between the
-// calls. Such a bug is missed, never invented.
+// The receiver must be the same buffer at both calls: a local variable, a parameter, a global,
+// or a field such a value holds (ownerOf). A receiver loaded from memory at each call, such as
+// a buffer behind a pointer field or a variable that a function literal captures, is not
+// followed: it could be reassigned between the calls. Nor is an owner the function replaces
+// after a view of it was made (dropReplacedOwners). Such a bug is missed, never invented.
 type View struct {
 	Call   *ssa.Call
 	Callee *types.Func
 	// Owner is the receiver the view points into.
 	Owner ssa.Value
+}
+
+// fieldKey names a field held by value: the field at index in the struct that owner x points
+// to.
+type fieldKey struct {
+	x     ssa.Value
+	index int
 }
 
 // viewClass is what a class that holds a view views.
@@ -78,7 +86,7 @@ func (a *Analysis) addViews(calls []*ssa.Call) {
 			continue
 		}
 
-		owner := Base(call.Common().Args[0])
+		owner := a.ownerOf(call.Common().Args[0])
 		a.viewClasses[a.class(result)] = viewClass{view: len(a.views), owner: owner, endedBy: endedBy}
 		a.views = append(a.views, View{Call: call, Callee: callee, Owner: owner})
 	}
@@ -92,6 +100,7 @@ func (a *Analysis) endViews(calls []*ssa.Call) {
 		return
 	}
 
+	a.dropReplacedOwners()
 	a.addPhiViews()
 
 	for _, call := range calls {
@@ -105,7 +114,7 @@ func (a *Analysis) endViews(calls []*ssa.Call) {
 			continue
 		}
 
-		owner := Base(call.Common().Args[0])
+		owner := a.ownerOf(call.Common().Args[0])
 
 		var classes []int
 
@@ -193,12 +202,49 @@ func (a *Analysis) phiView(c int) (viewClass, bool) {
 	return merged, found
 }
 
-// ownerPrecedes reports whether owner is one value for every execution of phi: a parameter, a
-// free variable, or a global, or an instruction whose block strictly dominates phi's block. An
-// owner defined inside the loop that phi heads, such as a buffer declared in the loop body, is
-// a new buffer on each iteration although it is the same SSA value, so a view carried round
-// the loop belongs to an earlier one.
+// ownerOf returns the value that stands for the buffer a receiver points to. Usually that is
+// the receiver itself. A field held by value, such as c.buf in c.buf.Bytes() or a buffer that a
+// struct embeds, is at the same address for the same c, so every address of it in the
+// function stands for the first one. A field loaded through a pointer is not followed: the
+// pointer can be reassigned between the calls.
+func (a *Analysis) ownerOf(receiver ssa.Value) ssa.Value {
+	v := Base(receiver)
+
+	field, ok := v.(*ssa.FieldAddr)
+	if !ok {
+		return v
+	}
+
+	key := fieldKey{x: a.ownerOf(field.X), index: field.Field}
+	if first, seen := a.fieldOwners[key]; seen {
+		return first
+	}
+
+	if a.fieldOwners == nil {
+		a.fieldOwners = make(map[fieldKey]ssa.Value)
+	}
+
+	a.fieldOwners[key] = field
+
+	return field
+}
+
+// ownerPrecedes reports whether owner is one buffer for every execution of phi. For a field
+// held by value that is whether the struct it is in is: the field's address follows from it.
+// It holds for a parameter, a free variable, or a global, and for an instruction whose block
+// strictly dominates phi's block. An owner defined inside the loop that phi heads, such as a
+// buffer declared in the loop body, is a new buffer on each iteration although it is the same
+// SSA value, so a view carried round the loop belongs to an earlier one.
 func ownerPrecedes(owner ssa.Value, phi *ssa.Phi) bool {
+	for {
+		field, ok := owner.(*ssa.FieldAddr)
+		if !ok {
+			break
+		}
+
+		owner = field.X
+	}
+
 	instr, ok := owner.(ssa.Instruction)
 	if !ok {
 		return true
@@ -207,6 +253,96 @@ func ownerPrecedes(owner ssa.Value, phi *ssa.Phi) bool {
 	defined := instr.Block()
 
 	return defined != phi.Block() && defined.Dominates(phi.Block())
+}
+
+// dropReplacedOwners stops following the views of an owner that a store may replace after a
+// view of it was made: a store to the owner itself, or to a struct it is part of, such as
+// buf = bytes.Buffer{} or *c = conn{}. The view keeps the old buffer, which calls on the new one
+// do not touch. A store that cannot run after any view of the owner, such as an initialisation,
+// replaces nothing a view points into. A buffer replaced inside a called function is not seen.
+func (a *Analysis) dropReplacedOwners() {
+	var stores []*ssa.Store
+
+	for _, b := range a.Fn.Blocks {
+		for _, instr := range b.Instrs {
+			if st, ok := instr.(*ssa.Store); ok {
+				stores = append(stores, st)
+			}
+		}
+	}
+
+	if len(stores) == 0 {
+		return
+	}
+
+	replaced := make(map[ssa.Value]bool)
+
+	for _, v := range a.views {
+		enclosing := a.enclosingOwners(v.Owner)
+
+		for _, st := range stores {
+			if enclosing[a.ownerOf(st.Addr)] && mayRunAfter(v.Call, st) {
+				replaced[v.Owner] = true
+				break
+			}
+		}
+	}
+
+	for c, vc := range a.viewClasses {
+		if replaced[vc.owner] {
+			delete(a.viewClasses, c)
+		}
+	}
+}
+
+// enclosingOwners returns owner and, for a field held by value, the structs it is part of, out
+// to the one it starts from: c.buf and c for c.buf.
+func (a *Analysis) enclosingOwners(owner ssa.Value) map[ssa.Value]bool {
+	enclosing := map[ssa.Value]bool{owner: true}
+
+	for {
+		field, ok := owner.(*ssa.FieldAddr)
+		if !ok {
+			return enclosing
+		}
+
+		owner = a.ownerOf(field.X)
+		enclosing[owner] = true
+	}
+}
+
+// mayRunAfter reports whether instruction y can run after x: later in x's block, or in a block
+// reachable from it.
+func mayRunAfter(x, y ssa.Instruction) bool {
+	if x.Block() == y.Block() {
+		for _, instr := range x.Block().Instrs {
+			if instr == y {
+				break
+			}
+
+			if instr == x {
+				return true
+			}
+		}
+	}
+
+	seen := make(map[*ssa.BasicBlock]bool)
+
+	for work := append([]*ssa.BasicBlock(nil), x.Block().Succs...); len(work) > 0; {
+		b := work[len(work)-1]
+		work = work[:len(work)-1]
+
+		if b == y.Block() {
+			return true
+		}
+
+		if !seen[b] {
+			seen[b] = true
+			work = append(work, b.Succs...)
+		}
+	}
+
+	return false
 }
 
 // viewResult returns the view a call returns: the call itself, or the first value of the tuple

@@ -30,6 +30,10 @@ import (
 	"strconv"
 )
 
+type conn struct{ buf bytes.Buffer }
+
+type twoBuffers struct{ a, b bytes.Buffer }
+
 func use([]byte) {}
 
 func copied(buf *bytes.Buffer) {
@@ -143,6 +147,84 @@ func grownAvailable(buf *bytes.Buffer) {
 	b := buf.AvailableBuffer()
 	buf.Grow(64)
 	use(b)
+}
+
+// detached replaces the buffer: b keeps the old array, which writes to the new buffer do not
+// touch.
+func (c *conn) detached() []byte {
+	b := c.buf.Bytes()
+	c.buf = bytes.Buffer{}
+	c.buf.WriteString("hdr")
+
+	return b
+}
+
+func (c *conn) detachedAll() []byte {
+	b := c.buf.Bytes()
+	*c = conn{}
+	c.buf.WriteString("hdr")
+
+	return b
+}
+
+func localReplaced() []byte {
+	var buf bytes.Buffer
+	buf.WriteString("x")
+	b := buf.Bytes()
+	buf = bytes.Buffer{}
+	buf.WriteString("hdr")
+
+	return b
+}
+
+// correlatedInLoop uses data only on the iterations where it is nil.
+func correlatedInLoop(fast bool, n int, buf *bytes.Buffer) {
+	var data []byte
+	for i := 0; i < n; i++ {
+		if !fast {
+			use(data)
+		}
+
+		if fast {
+			data = buf.Bytes()
+		}
+
+		buf.WriteByte('x')
+	}
+}
+
+func firstIterationOnly(n int, buf *bytes.Buffer) {
+	var last []byte
+	for i := 0; i < n; i++ {
+		if i == 0 {
+			use(last)
+		}
+
+		last = buf.Bytes()
+		buf.WriteByte('x')
+	}
+}
+
+func otherConn(x, y *conn) {
+	b := x.buf.Bytes()
+	y.buf.Reset()
+	use(b)
+}
+
+func otherField(t *twoBuffers) {
+	b := t.a.Bytes()
+	t.b.Reset()
+	use(b)
+}
+
+// connEachIteration keeps a view into the previous connection's buffer.
+func connEachIteration(conns []*conn) {
+	var prev []byte
+	for _, c := range conns {
+		c.buf.WriteByte('x')
+		use(prev)
+		prev = c.buf.Bytes()
+	}
 }
 
 func otherBuffer(a, b *bytes.Buffer) {

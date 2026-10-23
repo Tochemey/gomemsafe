@@ -103,6 +103,9 @@ type Analysis struct {
 	// viewClasses maps each class that is a view to what it views: the classes of view calls,
 	// and phis of them.
 	viewClasses map[int]viewClass
+	// fieldOwners maps each field held by value to the first address of it, the owner that
+	// stands for every other address of the same field (ownerOf).
+	fieldOwners map[fieldKey]ssa.Value
 	solution    flow.Solution
 }
 

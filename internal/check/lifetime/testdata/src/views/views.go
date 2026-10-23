@@ -32,6 +32,10 @@ import (
 
 var shared bytes.Buffer
 
+type conn struct{ buf bytes.Buffer }
+
+type embeds struct{ bytes.Buffer }
+
 func use([]byte) {}
 
 func reset(buf *bytes.Buffer) {
@@ -53,6 +57,18 @@ func keepLast(sc *bufio.Scanner) {
 		last = sc.Bytes()
 	}
 	use(last) // want `MS302: last used after sc.Scan ended the views into sc`
+}
+
+func (c *conn) flush() {
+	b := c.buf.Bytes()
+	c.buf.Reset()
+	use(b) // want `MS302: b used after c.buf.Reset ended the views into c.buf`
+}
+
+func (e *embeds) flush() {
+	b := e.Bytes()
+	e.Reset()
+	use(b) // want `MS302: b used after e.Reset ended the views into e`
 }
 
 func peek(r *bufio.Reader, p []byte) {
@@ -120,6 +136,19 @@ func converted(buf *bytes.Buffer) string {
 	buf.Reset()
 
 	return string(b) // want `MS302: b used after buf.Reset ended the views into buf`
+}
+
+func returned(buf *bytes.Buffer) []byte {
+	b := buf.Bytes()
+	buf.Reset()
+
+	return b // want `MS302: b used after buf.Reset ended the views into buf`
+}
+
+func sent(buf *bytes.Buffer, ch chan<- []byte) {
+	b := buf.Bytes()
+	buf.Reset()
+	ch <- b // want `MS302: b used after buf.Reset ended the views into buf`
 }
 
 func inGoroutine(buf *bytes.Buffer) {

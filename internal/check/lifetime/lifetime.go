@@ -258,6 +258,19 @@ func (c *checker) operandAt(instr ssa.Instruction, v ssa.Value, pos token.Pos) a
 			if e.Lparen == pos && len(e.Args) == 1 {
 				return e.Args[0]
 			}
+		case *ast.SendStmt:
+			if e.Arrow == pos {
+				return e.Value
+			}
+		case *ast.ReturnStmt:
+			// A return: SSA places it at the keyword, with the results in order.
+			if ret, ok := instr.(*ssa.Return); ok && e.Return == pos && len(e.Results) == len(ret.Results) {
+				for i, result := range ret.Results {
+					if result == v {
+						return e.Results[i]
+					}
+				}
+			}
 		}
 	}
 

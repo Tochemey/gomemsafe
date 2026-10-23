@@ -43,6 +43,41 @@ func use(b []byte) {}
 
 func release(x any) {}
 
+type conn struct{ buf bytes.Buffer }
+
+type embeds struct{ bytes.Buffer }
+
+type twoBuffers struct{ a, b bytes.Buffer }
+
+type pointerField struct{ buf *bytes.Buffer }
+
+func field(c *conn) { b := c.buf.Bytes(); c.buf.Reset(); use(b) }
+
+func embedded(e *embeds) { b := e.Bytes(); e.Reset(); use(b) }
+
+func otherConn(x, y *conn) { b := x.buf.Bytes(); y.buf.Reset(); use(b) }
+
+func otherField(t *twoBuffers) { b := t.a.Bytes(); t.b.Reset(); use(b) }
+
+func connEachIteration(conns []*conn) {
+	var prev []byte
+	for _, c := range conns {
+		c.buf.WriteByte('x')
+		use(prev)
+		prev = c.buf.Bytes()
+	}
+}
+
+func behindPointer(p *pointerField) { b := p.buf.Bytes(); p.buf.Reset(); use(b) }
+
+func captured(buf *bytes.Buffer) func() {
+	return func() {
+		b := buf.Bytes()
+		buf.Reset()
+		use(b)
+	}
+}
+
 func reset(buf *bytes.Buffer) { b := buf.Bytes(); buf.Reset(); use(b) }
 
 func scan(sc *bufio.Scanner) { x := sc.Bytes(); sc.Scan(); use(x) }
@@ -184,6 +219,81 @@ func sameBlockOwner(next func() *bytes.Buffer) {
 	}
 }
 
+// nilEachIteration clears last on the back edge: only the first iteration sees the ended view,
+// and it does not use it.
+func nilEachIteration(n int, sc *bufio.Scanner) {
+	last := sc.Bytes()
+	sc.Scan()
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			use(last)
+		}
+		last = nil
+	}
+}
+
+// firstIterationOnly uses last only in the first iteration, while it is still valid.
+func firstIterationOnly(n int, sc *bufio.Scanner) {
+	last := sc.Bytes()
+	for i := 0; i < n; i++ {
+		if i == 0 {
+			use(last)
+		}
+		last = sc.Bytes()
+		sc.Scan()
+	}
+}
+
+type tokens struct{ sc bufio.Scanner }
+
+type outer struct{ in conn }
+
+func fieldReplaced(c *conn) []byte { b := c.buf.Bytes(); c.buf = bytes.Buffer{}; c.buf.WriteString("x"); return b }
+
+func structReplaced(c *conn) []byte { b := c.buf.Bytes(); *c = conn{}; c.buf.WriteString("x"); return b }
+
+func enclosingReplaced(o *outer) []byte { b := o.in.buf.Bytes(); o.in = conn{}; o.in.buf.WriteString("x"); return b }
+
+func localReplaced() []byte {
+	var buf bytes.Buffer
+	buf.WriteString("x")
+	b := buf.Bytes()
+	buf = bytes.Buffer{}
+	buf.WriteString("y")
+	return b
+}
+
+func replacedEachIteration(xs []string) {
+	var c conn
+	var prev []byte
+	for _, x := range xs {
+		c = conn{}
+		c.buf.WriteString(x)
+		use(prev)
+		prev = c.buf.Bytes()
+	}
+}
+
+// initialisedFirst stores the buffer only before the view is made, which replaces nothing the
+// view points into.
+func initialisedFirst(src *bytes.Buffer) {
+	var buf bytes.Buffer
+	buf = *src
+	b := buf.Bytes()
+	buf.Reset()
+	use(b)
+}
+
+// fieldKeepLast keeps the last token of a scanner that a struct holds. The view's owner,
+// t.sc, is first addressed in the loop body, but its struct t comes from outside the loop.
+func fieldKeepLast(t *tokens) {
+	var last []byte
+	for t.sc.Scan() {
+		last = t.sc.Bytes()
+	}
+	use(last)
+}
+
 func correlatedMerge(fast bool, buf *bytes.Buffer) {
 	var data []byte
 	if fast {
@@ -251,6 +361,10 @@ func TestUsesFindViewsUsedAfterTheyEnded(t *testing.T) {
 		{"nested", "Bytes", "WriteByte"},
 		{"indexed", "Bytes", "Reset"},
 		{"mixedEventsWritten", "Bytes", "WriteByte"},
+		{"field", "Bytes", "Reset"},
+		{"embedded", "Bytes", "Reset"},
+		{"fieldKeepLast", "Bytes", "Scan"},
+		{"initialisedFirst", "Bytes", "Reset"},
 	} {
 		uses := analyzeViews(t, pkg, tc.name).Uses()
 		if len(uses) != 1 {
@@ -279,8 +393,10 @@ func TestUsesIgnoreViewsStillValid(t *testing.T) {
 		"passedToTheEvent", "usedBefore", "mixedEventsRead", "mixedOwners", "notOnlyViews",
 		"nestedLoopsMixedOwners", "errorOnly", "clearedNext", "correlatedMerge",
 		"newBufferEachIteration", "rangedBuffers", "scannerEachIteration", "sameBlockOwner",
+		"connEachIteration", "nilEachIteration", "firstIterationOnly", "fieldReplaced", "structReplaced",
+		"enclosingReplaced", "localReplaced", "replacedEachIteration",
 	} {
-		if uses := analyzeViews(t, pkg, name).Uses(); len(uses) != 0 {
+		if uses := usesOf(pkg, name); len(uses) != 0 {
 			t.Errorf("%s: %d uses, want 0", name, len(uses))
 		}
 	}
@@ -296,11 +412,33 @@ func TestAViewTakenBackIsAnInvalidation(t *testing.T) {
 }
 
 // TestMissesViewsKeptAcrossNestedLoops records a known miss: the outer loop's phi merges nil
-// from the entry with the inner loop's view, and nil keeps the merge valid. Skipping the nil
-// would report correlated branches such as correlatedMerge, which are correct.
+// from the entry with the inner loop's view, and the nil keeps the merge valid. Following it
+// takes a special case in the dataflow that the benchmark corpus has shown no need for.
 func TestMissesViewsKeptAcrossNestedLoops(t *testing.T) {
-	if uses := analyzeViews(t, buildSource(t, viewSrc), "nestedLoops").Uses(); len(uses) != 0 {
+	a := analyzeViews(t, buildSource(t, viewSrc), "nestedLoops")
+	if uses := a.Uses(); len(uses) != 0 {
 		t.Fatalf("%d uses; the miss is fixed, so move nestedLoops to the reported cases", len(uses))
+	}
+}
+
+// TestMissesOwnersLoadedFromMemory records known misses: a buffer behind a pointer field, and
+// one that a function literal captures, are loaded at each call and could be reassigned between
+// the calls, so they are not followed. Each load is a different owner, so no call ends a view
+// and there is no analysis at all. The control, reset, makes the same calls on a parameter and
+// is reported, so the test cannot pass because views stopped being tracked.
+func TestMissesOwnersLoadedFromMemory(t *testing.T) {
+	pkg := buildSource(t, viewSrc)
+
+	if uses := analyzeViews(t, pkg, "reset").Uses(); len(uses) != 1 {
+		t.Fatalf("control: reset has %d uses, want 1", len(uses))
+	}
+
+	for _, fn := range []*ssa.Function{pkg.Func("behindPointer"), pkg.Func("captured").AnonFuncs[0]} {
+		var eng flow.Engine
+
+		if a := invalidation.AnalyzeWithViews(fn, lookup, &eng); a != nil && len(a.Uses()) != 0 {
+			t.Errorf("%s: %d uses; the miss is fixed, so move it to the reported cases", fn, len(a.Uses()))
+		}
 	}
 }
 
@@ -309,7 +447,7 @@ func TestMissesViewsKeptAcrossNestedLoops(t *testing.T) {
 func TestViewsNeedAnEndingEvent(t *testing.T) {
 	pkg := buildSource(t, viewSrc)
 
-	for _, name := range []string{"neverEnded", "resultUnused", "grownAvailable"} {
+	for _, name := range []string{"neverEnded", "resultUnused", "grownAvailable", "otherConn", "otherField"} {
 		var eng flow.Engine
 
 		if a := invalidation.AnalyzeWithViews(pkg.Func(name), lookup, &eng); a != nil {
@@ -350,6 +488,18 @@ func callsUse(instr ssa.Instruction) bool {
 	fn := call.Common().StaticCallee()
 
 	return fn != nil && fn.Name() == "use"
+}
+
+// usesOf returns the uses AnalyzeWithViews finds in the function name, none when there is
+// nothing to analyse.
+func usesOf(pkg *ssa.Package, name string) []invalidation.Use {
+	var eng flow.Engine
+
+	if a := invalidation.AnalyzeWithViews(pkg.Func(name), lookup, &eng); a != nil {
+		return a.Uses()
+	}
+
+	return nil
 }
 
 func analyzeViews(t *testing.T, pkg *ssa.Package, name string) *invalidation.Analysis {

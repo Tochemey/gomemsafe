@@ -77,8 +77,8 @@ func TestStaysSilentOnCorrectViewUse(t *testing.T) {
 // and that the related positions are the call that made the view and the call that ended it,
 // at their opening parentheses, where SSA places calls.
 func TestPointsAtTheView(t *testing.T) {
-	message := regexp.MustCompile(`^MS302: (\w+) used after (\S+) ended the views into (\w+)$`)
-	related := regexp.MustCompile(`^\w+ is a view into \w+ from (\S+)$`)
+	message := regexp.MustCompile(`^MS302: (\w+) used after (\S+) ended the views into ([\w.]+)$`)
+	related := regexp.MustCompile(`^\w+ is a view into [\w.]+ from (\S+)$`)
 
 	results := analysistest.Run(t, analysistest.TestData(), lifetime.Analyzer, "views")
 	for _, r := range results {
