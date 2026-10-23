@@ -36,8 +36,9 @@
 // whether memory is shared. Their uses inside the generic body are not reported, because an
 // instantiation may be a plain value.
 //
-// Values are grouped into alias classes: a value and everything that is the same memory under
-// another type or length (interface conversions, type assertions, type changes, reslices).
+// Values are grouped into alias classes (file classes.go): a value and everything that is the
+// same memory under another type or length (interface conversions, type assertions, type
+// changes, reslices).
 // Invalidating any member invalidates the class. A phi node starts its own class and is invalid only if every incoming
 // value was invalid on its edge. Values loaded from memory (fields, address-taken variables)
 // are not tracked: Tier 1 may miss such bugs, but never reports a false one.
@@ -160,38 +161,6 @@ func analyze(fn *ssa.Function, lookup Lookup, eng *flow.Engine, withViews bool) 
 	a.solution = sol
 
 	return a
-}
-
-// Base strips conversions and reslices that keep the same memory, returning the value they
-// started from.
-func Base(v ssa.Value) ssa.Value {
-	for {
-		switch x := v.(type) {
-		case *ssa.MakeInterface:
-			v = x.X
-		case *ssa.Slice:
-			v = x.X
-		case *ssa.ChangeType:
-			v = x.X
-		case *ssa.ChangeInterface:
-			v = x.X
-		case *ssa.TypeAssert:
-			if x.CommaOk {
-				return v
-			}
-
-			v = x.X
-		case *ssa.Extract:
-			ta, ok := x.Tuple.(*ssa.TypeAssert)
-			if !ok || x.Index != 0 {
-				return v
-			}
-
-			v = ta.X
-		default:
-			return v
-		}
-	}
 }
 
 // N implements flow.Problem.
@@ -381,72 +350,6 @@ func (a *Analysis) addSiteClasses(site Site, classes, args []int, endsViews bool
 	a.endsViews = append(a.endsViews, endsViews)
 }
 
-// class returns the class whose base is v, creating it if needed.
-func (a *Analysis) class(v ssa.Value) int {
-	if c, ok := a.classOf[v]; ok {
-		return c
-	}
-
-	c := len(a.bases)
-	a.bases = append(a.bases, v)
-	a.classOf[v] = c
-
-	return c
-}
-
-// closeOverAliases adds to each class every value derived from its members by a
-// pointer-preserving conversion, and gives each phi fed by a tracked value its own class.
-func (a *Analysis) closeOverAliases() {
-	work := append([]ssa.Value(nil), a.bases...)
-	for len(work) > 0 {
-		v := work[len(work)-1]
-		work = work[:len(work)-1]
-		c := a.classOf[v]
-
-		for _, r := range referrersOf(v) {
-			derived, ok := r.(ssa.Value)
-			if !ok {
-				continue
-			}
-
-			if _, seen := a.classOf[derived]; seen {
-				continue
-			}
-
-			work = a.addDerived(derived, c, work)
-		}
-	}
-}
-
-// addDerived puts derived, a referrer of a member of class c, into the right class and returns
-// the work list extended with the values whose referrers must be visited next.
-func (a *Analysis) addDerived(derived ssa.Value, c int, work []ssa.Value) []ssa.Value {
-	switch d := derived.(type) {
-	case *ssa.Phi:
-		a.class(d)
-		return append(work, d)
-	case *ssa.TypeAssert:
-		a.classOf[d] = c
-		if !d.CommaOk {
-			return append(work, d)
-		}
-
-		for _, r := range referrersOf(d) {
-			if ex, ok := r.(*ssa.Extract); ok && ex.Index == 0 {
-				a.classOf[ex] = c
-				work = append(work, ex)
-			}
-		}
-
-		return work
-	case *ssa.MakeInterface, *ssa.ChangeType, *ssa.ChangeInterface, *ssa.Slice:
-		a.classOf[d] = c
-		return append(work, d)
-	}
-
-	return work
-}
-
 // siteFor returns the index of the invalidating site of class c that is closest before pos, or
 // of the first one when none precedes it (for example, a site earlier in a loop), the argument
 // that held c there, and the class the site invalidates: c, or for a phi class, which has no
@@ -460,29 +363,6 @@ func (a *Analysis) siteFor(c int, pos token.Pos) (int, int, int) {
 	}
 
 	return 0, a.siteArgs[0][0], a.siteClasses[0][0]
-}
-
-// sourceClasses returns c followed by the classes that flow into it through phis, nearest
-// first.
-func (a *Analysis) sourceClasses(c int) []int {
-	order := []int{c}
-	seen := map[int]bool{c: true}
-
-	for i := 0; i < len(order); i++ {
-		phi, ok := a.bases[order[i]].(*ssa.Phi)
-		if !ok {
-			continue
-		}
-
-		for _, v := range phi.Edges {
-			if ec, tracked := a.classOf[v]; tracked && !seen[ec] {
-				seen[ec] = true
-				order = append(order, ec)
-			}
-		}
-	}
-
-	return order
 }
 
 // nearestSite returns the index of the site invalidating class c that is closest before pos,
@@ -563,14 +443,6 @@ func sharesMemory(t types.Type) bool {
 	}
 
 	return false
-}
-
-func referrersOf(v ssa.Value) []ssa.Instruction {
-	if refs := v.Referrers(); refs != nil {
-		return *refs
-	}
-
-	return nil
 }
 
 func isUse(instr ssa.Instruction) bool {

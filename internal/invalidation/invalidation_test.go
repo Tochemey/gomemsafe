@@ -211,31 +211,6 @@ func TestInvalidAtReturn(t *testing.T) {
 	}
 }
 
-func TestBaseStripsConversionsThatKeepTheMemory(t *testing.T) {
-	pkg := build(t)
-
-	for _, name := range []string{"viaInterface", "resliced"} {
-		fn := pkg.Func(name)
-		param := fn.Params[0]
-
-		for _, b := range fn.Blocks {
-			for _, instr := range b.Instrs {
-				v, ok := instr.(ssa.Value)
-				if !ok {
-					continue
-				}
-
-				switch v.(type) {
-				case *ssa.MakeInterface, *ssa.TypeAssert, *ssa.Slice:
-					if got := invalidation.Base(v); got != param {
-						t.Errorf("%s: Base(%s) = %s, want the parameter", name, v.Name(), got.Name())
-					}
-				}
-			}
-		}
-	}
-}
-
 func lookup(fn *types.Func) effect.ArgSet {
 	switch fn.Name() {
 	case "release", "free":
