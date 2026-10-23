@@ -25,10 +25,21 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"flag"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+)
+
+const (
+	// mainEnv makes a child process of the test binary run main instead of the tests.
+	mainEnv = "GOMEMSAFE_TEST_MAIN"
+	// pinnedTag tags the commit of pinnedOrigin.
+	pinnedTag = "v1"
 )
 
 // cancelOnWrite is a stderr that cancels the run when it announces an entry, counting the
@@ -37,6 +48,23 @@ type cancelOnWrite struct {
 	cancel  context.CancelFunc
 	dir     string
 	entries int
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv(mainEnv) != "" {
+		main()
+	}
+
+	os.Exit(m.Run())
+}
+
+func TestMainPrintsUsage(t *testing.T) {
+	out, err := mainCommand(t, "-h").CombinedOutput()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 || !strings.Contains(string(out), "Usage of bench") {
+		t.Fatalf("err = %v, output %q; want exit 2 and the usage", err, out)
+	}
 }
 
 func TestParseOptions(t *testing.T) {
@@ -70,6 +98,79 @@ func TestRunBenchExitCodes(t *testing.T) {
 
 	if code := runBench([]string{"-corpus", "nope"}, &stdout, &stderr); code != 1 {
 		t.Fatalf("unknown entry: exit %d, want 1", code)
+	}
+
+	stderr.Reset()
+
+	if code := runBench([]string{"-scenario", "nope"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "bench: unknown scenario") {
+		t.Fatalf("unknown scenario: exit %d, stderr %q; want 2 and the error", code, stderr.String())
+	}
+}
+
+func TestBenchmarkFailsOutsideARepository(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+
+	if code := runBench(nil, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), gitTopLevel) {
+		t.Fatalf("exit %d, stderr %q; want 1 and the git error", code, stderr.String())
+	}
+}
+
+func TestBenchmarkFailsWithoutATemporaryDirectory(t *testing.T) {
+	corpus := syntheticCorpus(t, "./...")
+	missing := filepath.Join(t.TempDir(), "missing")
+	t.Setenv("TMPDIR", missing)
+
+	var stdout, stderr bytes.Buffer
+
+	if code := runBench([]string{"-corpus-file", corpus}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), missing) {
+		t.Fatalf("exit %d, stderr %q; want 1 and the temporary directory error", code, stderr.String())
+	}
+}
+
+func TestBenchmarkFailsWhenTheToolsDoNotBuild(t *testing.T) {
+	corpus := syntheticCorpus(t, "./...")
+	tmp := isolateTempDir(t)
+	repo := emptyRepository(t)
+	t.Chdir(repo)
+
+	var stdout, stderr bytes.Buffer
+
+	if code := runBench([]string{"-corpus-file", corpus}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), gomemsafePackage) {
+		t.Fatalf("exit %d, stderr %q; want 1 and the build error", code, stderr.String())
+	}
+
+	assertEmpty(t, tmp)
+}
+
+func TestBenchmarkFailsWhenAnEntryFails(t *testing.T) {
+	tests := []struct{ name, corpus, want string }{
+		{"clone", `[{"name": "remote", "repo": "` + filepath.Join(t.TempDir(), "missing") + `", "commit": "abc", "patterns": ["./..."]}]`, "remote: "},
+		{"measure", `[{"name": "synthetic", "synthetic": true, "small": true, "patterns": ["./missing"]}]`, "synthetic: "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			corpus := filepath.Join(t.TempDir(), corpusFileName)
+			write(t, corpus, tt.corpus)
+
+			tmp := isolateTempDir(t)
+
+			var stdout, stderr bytes.Buffer
+
+			if code := runBench([]string{"-corpus-file", corpus}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "bench: "+tt.want) {
+				t.Fatalf("exit %d, stderr %q; want 1 and the entry's error", code, stderr.String())
+			}
+
+			assertEmpty(t, tmp)
+		})
+	}
+}
+
+func TestNewReportOfARepositoryWithoutCommits(t *testing.T) {
+	if got := newReport(context.Background(), emptyRepository(t)).Commit; got != "unknown" {
+		t.Fatalf("commit = %q, want unknown", got)
 	}
 }
 
@@ -136,23 +237,48 @@ func TestPrepareSourceGeneratesTheSyntheticCorpus(t *testing.T) {
 	}
 }
 
-func TestCloneAtPinsTheCommit(t *testing.T) {
-	ctx := context.Background()
-	origin := t.TempDir()
+func TestPrepareSourceClonesTheEntry(t *testing.T) {
+	origin, commit := pinnedOrigin(t)
+	work := t.TempDir()
+	e := Entry{Name: "local", Repo: origin, Commit: commit, Dir: "sub"}
 
-	for _, args := range [][]string{
-		{"init", "--quiet"},
-		{"-c", "user.name=bench", "-c", "user.email=bench@example.com", "commit", "--quiet", "--allow-empty", "-m", "pinned"},
-	} {
-		if _, err := gitOutput(ctx, origin, args...); err != nil {
-			t.Fatalf("git %v: %v", args, err)
-		}
-	}
-
-	commit, err := gitOutput(ctx, origin, gitRevParse, gitHead)
+	dir, err := prepareSource(context.Background(), e, work)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	if want := filepath.Join(work, clonesDir, e.cloneName(), "sub"); dir != want {
+		t.Fatalf("dir = %s, want %s", dir, want)
+	}
+}
+
+func TestCloneAtFailsWhenHEADCannotBeRead(t *testing.T) {
+	origin, commit := pinnedOrigin(t)
+
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A git that fails only rev-parse, which a real one does not after a checkout.
+	dir := t.TempDir()
+	script := "#!/bin/sh\n[ \"$1\" = " + gitRevParse + " ] && exit 2\nexec '" + git + "' \"$@\"\n"
+
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o700); err != nil { //nolint:gosec // G306: the fake git must be executable
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := cloneAt(context.Background(), Entry{Name: "local", Repo: origin, Commit: commit}, t.TempDir()); err == nil ||
+		!strings.Contains(err.Error(), gitRevParse) {
+		t.Fatalf("err = %v, want the rev-parse error", err)
+	}
+}
+
+func TestCloneAtPinsTheCommit(t *testing.T) {
+	ctx := context.Background()
+	origin, commit := pinnedOrigin(t)
 
 	dir, err := cloneAt(ctx, Entry{Name: "local", Repo: origin, Commit: commit}, t.TempDir())
 	if err != nil {
@@ -166,6 +292,19 @@ func TestCloneAtPinsTheCommit(t *testing.T) {
 	unknown := Entry{Name: "local", Repo: origin, Commit: strings.Repeat("0", 40)}
 	if _, err := cloneAt(ctx, unknown, t.TempDir()); err == nil {
 		t.Fatal("a commit the remote does not have: no error")
+	}
+
+	// A tag names the commit, but it is not the commit the entry must pin.
+	tagged := Entry{Name: "local", Repo: origin, Commit: pinnedTag}
+	if _, err := cloneAt(ctx, tagged, t.TempDir()); err == nil || !strings.Contains(err.Error(), "want the pinned "+pinnedTag) {
+		t.Fatalf("a tag instead of a commit: %v, want the pin error", err)
+	}
+
+	file := filepath.Join(t.TempDir(), "file")
+	write(t, file, "")
+
+	if _, err := cloneAt(ctx, Entry{Name: "local", Repo: origin, Commit: commit}, file); err == nil {
+		t.Fatal("a parent that is a file: no error")
 	}
 }
 
@@ -187,6 +326,32 @@ func TestWriteReport(t *testing.T) {
 	for _, ext := range []string{".json", ".md"} {
 		if _, err := os.Stat(filepath.Join(dir, "2026-10-22-abc"+ext)); err != nil {
 			t.Errorf("%s not written: %v", ext, err)
+		}
+	}
+}
+
+func TestWriteReportFailures(t *testing.T) {
+	rep := report{Date: "2026-10-22", Commit: "abc"}
+	file := filepath.Join(t.TempDir(), "file")
+	write(t, file, "")
+
+	if err := writeReport(rep, filepath.Join(file, "out"), new(bytes.Buffer)); err == nil {
+		t.Error("an output directory under a file: no error")
+	}
+
+	nan := report{Results: []result{{Measurement: measurement{MaxRSSRatio: math.NaN()}}}}
+	if err := writeReport(nan, t.TempDir(), new(bytes.Buffer)); err == nil {
+		t.Error("a ratio JSON cannot encode: no error")
+	}
+
+	for _, ext := range []string{".json", ".md"} {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "2026-10-22-abc"+ext), 0o750); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := writeReport(rep, dir, new(bytes.Buffer)); err == nil {
+			t.Errorf("a directory where the %s file goes: no error", ext)
 		}
 	}
 }
@@ -220,4 +385,76 @@ func assertEmpty(t *testing.T, dir string) {
 	if err != nil || len(left) != 0 {
 		t.Fatalf("the run left %v behind (%v)", left, err)
 	}
+}
+
+// syntheticCorpus writes a corpus file with the small generated corpus, analysed with pattern.
+func syntheticCorpus(t *testing.T, pattern string) string {
+	t.Helper()
+
+	corpus := filepath.Join(t.TempDir(), corpusFileName)
+	write(t, corpus, `[{"name": "synthetic", "synthetic": true, "small": true, "patterns": ["`+pattern+`"]}]`)
+
+	return corpus
+}
+
+// emptyRepository returns a new git repository without commits.
+func emptyRepository(t *testing.T) string {
+	t.Helper()
+
+	repo := t.TempDir()
+	if _, err := gitOutput(context.Background(), repo, "init", gitQuiet); err != nil {
+		t.Fatal(err)
+	}
+
+	return repo
+}
+
+// pinnedOrigin returns a repository with one commit, tagged pinnedTag, and that commit.
+func pinnedOrigin(t *testing.T) (string, string) {
+	t.Helper()
+
+	ctx := context.Background()
+	origin := emptyRepository(t)
+
+	for _, args := range [][]string{
+		{"-c", "user.name=bench", "-c", "user.email=bench@example.com", "commit", "--quiet", "--allow-empty", "-m", "pinned"},
+		{"tag", pinnedTag},
+	} {
+		if _, err := gitOutput(ctx, origin, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	commit, err := gitOutput(ctx, origin, gitRevParse, gitHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return origin, commit
+}
+
+// mainCommand runs main with args in a child process of the test binary. The child writes its
+// coverage where the test binary does, so the coverage profile includes main.
+func mainCommand(t *testing.T, args ...string) *exec.Cmd {
+	t.Helper()
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(self, args...) //nolint:gosec // G204: the test binary, with test-chosen arguments
+
+	cmd.Env = append(os.Environ(), mainEnv+"=1")
+
+	if testing.CoverMode() != "" {
+		dir := flag.Lookup("test.gocoverdir").Value.String()
+		if dir == "" {
+			dir = t.TempDir()
+		}
+
+		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
+	}
+
+	return cmd
 }

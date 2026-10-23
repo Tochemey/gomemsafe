@@ -113,6 +113,33 @@ func f() {
 	}
 }
 
+// TestWalkSkipsBlocksSolveDidNotReach walks a function with a defer: SSA gives it a recover
+// block, which panics enter and no block jumps to.
+func TestWalkSkipsBlocksSolveDidNotReach(t *testing.T) {
+	fn := buildFunc(t, `
+func f() {
+	defer set(0)
+	check(0)
+}`)
+
+	if fn.Recover == nil {
+		t.Fatal("no recover block to skip")
+	}
+
+	var eng Engine
+
+	sol, outcome := eng.Solve(fn, newCallProblem(fn, 1))
+	if outcome != Solved {
+		t.Fatalf("outcome = %v, want Solved", outcome)
+	}
+
+	sol.Walk(func(instr ssa.Instruction, _ *Bitset) {
+		if instr.Block() == fn.Recover {
+			t.Errorf("visited %v in the recover block", instr)
+		}
+	})
+}
+
 func TestSolveStopsAtBudget(t *testing.T) {
 	fn := buildFunc(t, `
 func f(n int) {

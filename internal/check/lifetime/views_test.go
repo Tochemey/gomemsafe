@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package lifetime_test
+package lifetime
 
 import (
 	"go/token"
@@ -31,16 +31,15 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/tochemey/gomemsafe/internal/check/lifetime"
 	"github.com/tochemey/gomemsafe/internal/lazyssa"
 )
 
 func TestReportsViewsUsedAfterTheyEnded(t *testing.T) {
-	results := analysistest.Run(t, analysistest.TestData(), lifetime.Analyzer, "views")
+	results := analysistest.Run(t, analysistest.TestData(), Analyzer, "views")
 	for _, r := range results {
 		for _, d := range r.Diagnostics {
-			if d.Category != lifetime.ViewID.String() {
-				t.Errorf("%q: category %q, want %s", d.Message, d.Category, lifetime.ViewID)
+			if d.Category != ViewID.String() {
+				t.Errorf("%q: category %q, want %s", d.Message, d.Category, ViewID)
 			}
 
 			if len(d.Related) != 2 || len(d.SuggestedFixes) != 1 || d.SuggestedFixes[0].Message == "" {
@@ -54,7 +53,7 @@ func TestReportsViewsUsedAfterTheyEnded(t *testing.T) {
 // TestReportsAViewTakenBackAsAnInvalidation covers a view returned to a sync.Pool: MS301, not
 // MS302.
 func TestReportsAViewTakenBackAsAnInvalidation(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), lifetime.Analyzer, "viewsput")
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "viewsput")
 }
 
 // TestBuildsNoSSAForViewsNothingEnds covers a package that makes views but never calls anything
@@ -70,7 +69,7 @@ func TestBuildsNoSSAForViewsNothingEnds(t *testing.T) {
 }
 
 func TestStaysSilentOnCorrectViewUse(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), lifetime.Analyzer, "viewsfalsepos")
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "viewsfalsepos")
 }
 
 // TestPointsAtTheView checks that each finding's column is where the view it names is written,
@@ -80,7 +79,7 @@ func TestPointsAtTheView(t *testing.T) {
 	message := regexp.MustCompile(`^MS302: (\w+) used after (\S+) ended the views into ([\w.]+)$`)
 	related := regexp.MustCompile(`^\w+ is a view into [\w.]+ from (\S+)$`)
 
-	results := analysistest.Run(t, analysistest.TestData(), lifetime.Analyzer, "views")
+	results := analysistest.Run(t, analysistest.TestData(), Analyzer, "views")
 	for _, r := range results {
 		for _, d := range r.Diagnostics {
 			m := message.FindStringSubmatch(d.Message)
@@ -127,7 +126,7 @@ func ssaBuilds(t *testing.T, pkg string) int64 {
 
 	before := lazyssa.Builds()
 
-	analysistest.Run(t, analysistest.TestData(), lifetime.Analyzer, pkg)
+	analysistest.Run(t, analysistest.TestData(), Analyzer, pkg)
 
 	return lazyssa.Builds() - before
 }

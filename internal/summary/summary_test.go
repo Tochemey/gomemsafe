@@ -23,6 +23,7 @@
 package summary_test
 
 import (
+	"go/types"
 	"testing"
 
 	"golang.org/x/tools/go/analysis/analysistest"
@@ -33,6 +34,18 @@ import (
 
 func TestExportsInvalidationFacts(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "helper")
+}
+
+func TestResultResolvesCallees(t *testing.T) {
+	r := analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "helper")[0]
+	res := r.Result.(*summary.Result)
+
+	for name, want := range map[string]effect.ArgSet{"Release": 0b1, "MaybeRelease": 0} {
+		fn := r.Pass.Pkg.Scope().Lookup(name).(*types.Func)
+		if got := res.Invalidates(fn); got != want {
+			t.Errorf("Invalidates(%s) = %#x, want %#x", name, uint64(got), uint64(want))
+		}
+	}
 }
 
 func TestFactString(t *testing.T) {

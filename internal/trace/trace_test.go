@@ -28,6 +28,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,6 +77,23 @@ func TestRecordAndWrapWriteEvents(t *testing.T) {
 
 	if events[0].Elapsed <= 0 || events[2].Elapsed < events[0].Elapsed {
 		t.Fatalf("elapsed times %d, %d; want positive and growing", events[0].Elapsed, events[2].Elapsed)
+	}
+}
+
+func TestRecordStopsWhenTheTraceFileCannotBeOpened(t *testing.T) {
+	dir = filepath.Join(t.TempDir(), "missing")
+	openOnce, file, openErr = sync.Once{}, nil, nil
+
+	t.Cleanup(func() {
+		dir = ""
+		openOnce, file, openErr = sync.Once{}, nil, nil
+	})
+
+	Record("p", "a", KindRun, time.Second)
+	Record("p", "a", KindRun, time.Second)
+
+	if openErr == nil || file != nil {
+		t.Fatalf("open error %v, file %v; want the error and no file", openErr, file)
 	}
 }
 

@@ -76,6 +76,21 @@ func TestReadStatsOfEmptyDirectory(t *testing.T) {
 	}
 }
 
+func TestReadStatsFailures(t *testing.T) {
+	if _, err := readStats("["); err == nil {
+		t.Error("a directory that is not a valid pattern: no error")
+	}
+
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "missing"), filepath.Join(dir, "1"+trace.FileExt)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := readStats(dir); err == nil {
+		t.Error("a trace file that cannot be opened: no error")
+	}
+}
+
 func writeEvents(t *testing.T, name string, events ...trace.Event) {
 	t.Helper()
 
