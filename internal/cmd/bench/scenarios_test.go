@@ -25,14 +25,23 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/tochemey/gomemsafe/internal/trace"
 )
+
+// fakeGoPrelude starts the fake go command: n is the number of this call, counted in a file
+// next to the script.
+const fakeGoPrelude = `#!/bin/sh
+n=$(( $(cat "$0.calls" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$0.calls"
+`
 
 func TestMostImportedPicksTheMostImportedPackage(t *testing.T) {
 	listing := "a\t/m/a\ta2.go,a1.go\tb,c\n" +
@@ -167,6 +176,96 @@ func TestMeasureRunsTheRSSScenarioAlone(t *testing.T) {
 	}
 }
 
+// TestMeasureStopsAtTheFirstFailure runs measure with a fake go command. With every scenario,
+// the calls are: 1 cold vet, 2 cold gomemsafe, then 3 the compile for rss; 3 and 4 the warm
+// runs; or 3 go list and 4 gomemsafe after the edit.
+func TestMeasureStopsAtTheFirstFailure(t *testing.T) {
+	pkg := t.TempDir()
+	write(t, filepath.Join(pkg, "p.go"), "package p\n")
+
+	readOnly := t.TempDir()
+	write(t, filepath.Join(readOnly, "p.go"), "package p\n")
+
+	if err := os.Chmod(filepath.Join(readOnly, "p.go"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+
+	list := func(dir string) string {
+		return fmt.Sprintf(`[ "$1" = list ] && printf 'example.com/p\t%s\tp.go\t\n'`, dir)
+	}
+
+	cold := map[string]bool{scenarioCold: true}
+	rss := map[string]bool{scenarioRSS: true}
+	warm := map[string]bool{scenarioWarm: true}
+	edit := map[string]bool{scenarioEdit: true}
+
+	tests := []struct {
+		name      string
+		scenarios map[string]bool
+		script    string
+		want      string
+	}{
+		{"cold vet", cold, `[ "$n" = 1 ] && exit 2`, "exit status 2"},
+		{"cold gomemsafe", cold, `[ "$n" = 2 ] && exit 2`, "exit status 2"},
+		{"cold output", cold, `[ "$n" = 2 ] && echo 'not json'`, "invalid character"},
+		{"cold trace", cold, `[ "$n" = 2 ] && echo 'not json' > "$GOMEMSAFE_TRACE/bad.jsonl"`, "bad.jsonl"},
+		{"compile", rss, `[ "$n" = 3 ] && exit 2`, "exit status 2"},
+		{"compile RSS", rss, ``, compileRSSFile},
+		{"warm vet", warm, `[ "$n" = 3 ] && exit 2`, "exit status 2"},
+		{"warm gomemsafe", warm, `[ "$n" = 4 ] && exit 2`, "exit status 2"},
+		{"go list", edit, `[ "$n" = 3 ] && exit 2`, "exit status 2"},
+		{"nothing to edit", edit, ``, "no package with Go files"},
+		{"missing package", edit, list(filepath.Join(pkg, "missing")), "missing"},
+		{"missing file", edit, list(t.TempDir()), "p.go: no such file"},
+		{"read-only file", edit, list(readOnly), "p.go: permission denied"},
+		{"edited gomemsafe", edit, list(pkg) + "\n" + `[ "$n" = 4 ] && exit 2`, "exit status 2"},
+		{"edited trace", edit, list(pkg) + "\n" + `[ "$n" = 4 ] && echo 'not json' > "$GOMEMSAFE_TRACE/bad.jsonl"`, "bad.jsonl"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeGo(t, tt.script)
+
+			e := Entry{Name: "p", Patterns: []string{"./..."}}
+
+			_, err := measure(context.Background(), t.TempDir(), e, tools{}, tt.scenarios, t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want one mentioning %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestCountLinesFailures(t *testing.T) {
+	if _, err := countLines("["); err == nil {
+		t.Error("a directory that is not a valid pattern: no error")
+	}
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "x.go"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := countLines(dir); err == nil {
+		t.Error("a directory named like a Go file: no error")
+	}
+}
+
+func TestReadTraceFailures(t *testing.T) {
+	if _, err := readTrace("["); err == nil {
+		t.Error("a directory that is not a valid pattern: no error")
+	}
+
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "missing"), filepath.Join(dir, "x"+traceExt)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := readTrace(dir); err == nil {
+		t.Error("a trace file that cannot be opened: no error")
+	}
+}
+
 func TestTimeVetToleratesFindingsOnly(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "go.mod"), "module example.com/x\n\ngo 1.26\n")
@@ -196,6 +295,13 @@ func TestTimeGoFailsOnAnyNonZeroExit(t *testing.T) {
 
 	if _, _, err := timeGo(context.Background(), dir, []string{"version"}, "", ""); err != nil {
 		t.Fatalf("go version: %v", err)
+	}
+
+	file := filepath.Join(t.TempDir(), "file")
+	write(t, file, "")
+
+	if _, _, err := timeGo(context.Background(), dir, []string{"version"}, "", filepath.Join(file, "trace")); err == nil {
+		t.Fatal("a trace directory under a file: no error")
 	}
 }
 
@@ -230,4 +336,18 @@ func write(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// fakeGo puts a go command first on PATH that runs fakeGoPrelude, then script, and otherwise
+// succeeds without output.
+func fakeGo(t *testing.T, script string) {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(fakeGoPrelude+script+"\nexit 0\n"), 0o700); err != nil { //nolint:gosec // G306: the fake go command must be executable
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }

@@ -25,12 +25,34 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// mainEnv makes a child process of the test binary run main instead of the tests.
+const mainEnv = "GOMEMSAFE_TEST_MAIN"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(mainEnv) != "" {
+		main()
+	}
+
+	os.Exit(m.Run())
+}
+
+func TestMainPassesTheToolsExitCode(t *testing.T) {
+	err := mainCommand(t, "sh", "-c", "exit 3").Run()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 {
+		t.Fatalf("err = %v, want exit status 3 from the tool", err)
+	}
+}
 
 func TestPackagePath(t *testing.T) {
 	if got := packagePath([]string{"-o", "x.a", "-p", "example.com/p", "a.go"}); got != "example.com/p" {
@@ -106,4 +128,30 @@ func TestWrapRejectsMissingTool(t *testing.T) {
 	if code := wrap([]string{filepath.Join(t.TempDir(), "missing")}, ""); code != 1 {
 		t.Fatalf("missing tool: exit %d, want 1", code)
 	}
+}
+
+// mainCommand runs main with args in a child process of the test binary. The child writes its
+// coverage where the test binary does, so the coverage profile includes main.
+func mainCommand(t *testing.T, args ...string) *exec.Cmd {
+	t.Helper()
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(self, args...) //nolint:gosec // G204: the test binary, with test-chosen arguments
+
+	cmd.Env = append(os.Environ(), mainEnv+"=1")
+
+	if testing.CoverMode() != "" {
+		dir := flag.Lookup("test.gocoverdir").Value.String()
+		if dir == "" {
+			dir = t.TempDir()
+		}
+
+		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
+	}
+
+	return cmd
 }

@@ -60,3 +60,19 @@ func TestSyntheticPackageChainsImports(t *testing.T) {
 		t.Fatalf("p1 must import p0, release through it, and have two functions:\n%s", second)
 	}
 }
+
+func TestGenerateSyntheticFailures(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	write(t, file, "")
+
+	if _, err := generateSynthetic(filepath.Join(file, "corpus"), true); err == nil {
+		t.Error("a corpus directory under a file: no error")
+	}
+
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, packageName(0)), "")
+
+	if _, err := generateSynthetic(dir, true); err == nil {
+		t.Error("a file where a package directory goes: no error")
+	}
+}

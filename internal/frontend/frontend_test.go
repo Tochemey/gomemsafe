@@ -245,6 +245,78 @@ func TestMainPassesGoWarningsThrough(t *testing.T) {
 	}
 }
 
+func TestMainFailsWithoutItsOwnExecutable(t *testing.T) {
+	built := executable
+	executable = func() (string, error) { return "", errors.New("no executable") }
+
+	t.Cleanup(func() { executable = built })
+
+	code, _, errOut := runMain(t, t.TempDir())
+	if code != ExitError || !strings.Contains(errOut, "gomemsafe: no executable") {
+		t.Fatalf("exit code = %d, stderr %q; want %d and the error", code, errOut, ExitError)
+	}
+}
+
+func TestMainStatsFailsWithoutATemporaryDirectory(t *testing.T) {
+	dir := fixture(t, "clean")
+	missing := filepath.Join(t.TempDir(), "missing")
+	t.Setenv("TMPDIR", missing)
+
+	code, _, errOut := runMain(t, dir, "-stats")
+	if code != ExitError || !strings.Contains(errOut, missing) {
+		t.Fatalf("exit code = %d, stderr %q; want %d and the error", code, errOut, ExitError)
+	}
+}
+
+// TestMainRejectsWhatVetPrints runs the front-end over a fake go command, for output the real
+// one does not print.
+func TestMainRejectsWhatVetPrints(t *testing.T) {
+	tests := []struct {
+		name   string
+		args   []string
+		script string
+		code   int
+		want   string
+	}{
+		{"malformed output", nil, `echo 'not json'`, ExitError, "gomemsafe: reading go vet output: "},
+		{"analyzer error", nil, `echo '{"p": {"lifetime": {"error": "failed"}}}'`, ExitError, "gomemsafe: p: lifetime: failed\n"},
+		{"malformed trace", []string{"-stats"}, `echo 'not json' > "$GOMEMSAFE_TRACE/1.jsonl"`, ExitClean, "gomemsafe: stats: "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeGo(t, tt.script)
+
+			code, _, errOut := runMain(t, t.TempDir(), tt.args...)
+			if code != tt.code || !strings.Contains(errOut, tt.want) {
+				t.Fatalf("exit code = %d, stderr %q; want %d and %q", code, errOut, tt.code, tt.want)
+			}
+		})
+	}
+}
+
+func TestMainReportsATraceDirectoryItCannotRemove(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	// The fake go leaves a directory whose file cannot be deleted.
+	fakeGo(t, `mkdir "$GOMEMSAFE_TRACE/locked" && touch "$GOMEMSAFE_TRACE/locked/f" && chmod 500 "$GOMEMSAFE_TRACE/locked"`)
+
+	t.Cleanup(func() {
+		locked, _ := filepath.Glob(filepath.Join(tmp, "*", "locked"))
+		for _, dir := range locked {
+			if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // G302: a directory the test made, made removable again
+				t.Error(err)
+			}
+		}
+	})
+
+	code, _, errOut := runMain(t, t.TempDir(), "-stats")
+	if code != ExitClean || !strings.Contains(errOut, "gomemsafe: removing ") {
+		t.Fatalf("exit code = %d, stderr %q; want %d and the removal error", code, errOut, ExitClean)
+	}
+}
+
 func TestParseArgs(t *testing.T) {
 	o, err := parseArgs([]string{"-json", "-stats", "-lifetime=false", "./a", "-notaflag"})
 	if err != nil {
@@ -356,6 +428,19 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write fa
 // command runs the go command with arguments the test chose.
 func command(name string, args ...string) *exec.Cmd {
 	return exec.Command(name, args...) //nolint:gosec // G204: test-controlled binary and arguments
+}
+
+// fakeGo puts a go command first on PATH that runs script, a shell script.
+func fakeGo(t *testing.T, script string) {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, goCommand), []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil { //nolint:gosec // G306: the fake go command must be executable
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // runTests builds gomemsafe, isolates the go command from the developer's environment, and

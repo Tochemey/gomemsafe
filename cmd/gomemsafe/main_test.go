@@ -25,6 +25,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -32,10 +34,22 @@ import (
 
 	"github.com/tochemey/gomemsafe/internal/check/lifetime"
 	"github.com/tochemey/gomemsafe/internal/check/unsafeflow"
+	"github.com/tochemey/gomemsafe/internal/trace"
 )
 
+// mainEnv makes a child process of the test binary run main instead of the tests.
+const mainEnv = "GOMEMSAFE_TEST_MAIN"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(mainEnv) != "" {
+		main()
+	}
+
+	os.Exit(m.Run())
+}
+
 func TestVetToolModeDescribesFlags(t *testing.T) {
-	out, err := command(build(t), "-flags").Output()
+	out, err := mainCommand(t, "-flags").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +77,7 @@ func TestVetToolModeDescribesFlags(t *testing.T) {
 }
 
 func TestVetToolModeReportsVersion(t *testing.T) {
-	out, err := command(build(t), "-V=full").Output()
+	out, err := mainCommand(t, "-V=full").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +88,7 @@ func TestVetToolModeReportsVersion(t *testing.T) {
 }
 
 func TestVetToolModeRejectsUnreadableConfig(t *testing.T) {
-	cmd := command(build(t), filepath.Join(t.TempDir(), "missing.cfg"))
+	cmd := mainCommand(t, filepath.Join(t.TempDir(), "missing.cfg"))
 
 	out, err := cmd.CombinedOutput()
 
@@ -85,7 +99,7 @@ func TestVetToolModeRejectsUnreadableConfig(t *testing.T) {
 }
 
 func TestFrontEndModeHelp(t *testing.T) {
-	cmd := command(build(t), "-h")
+	cmd := mainCommand(t, "-h")
 
 	out, err := cmd.CombinedOutput()
 
@@ -95,21 +109,84 @@ func TestFrontEndModeHelp(t *testing.T) {
 	}
 }
 
-// command runs a binary the test built, or the go command, with arguments the test chose.
+func TestVetToolModeTracesEveryAnalyzer(t *testing.T) {
+	module := t.TempDir()
+	traces := t.TempDir()
+
+	for name, content := range map[string]string{"go.mod": "module example.com/m\n\ngo 1.26\n", "m.go": "package m\n"} {
+		if err := os.WriteFile(filepath.Join(module, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// go vet runs the test binary as its vet tool. A fresh build cache makes it analyse the
+	// package rather than replay a cached result.
+	cmd := command("go", "vet", "-vettool="+testBinary(t), "./...")
+	cmd.Dir = module
+
+	cmd.Env = append(mainEnviron(t), "GOCACHE="+t.TempDir(), "GOFLAGS=", "GOWORK=off", "GOTOOLCHAIN=local",
+		"GOPROXY=off", trace.EnvVar+"="+traces)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go vet: %v\n%s", err, out)
+	}
+
+	files, err := filepath.Glob(filepath.Join(traces, "*"+trace.FileExt))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("trace files = %v, %v; want the vet tool's", files, err)
+	}
+
+	data, err := os.ReadFile(filepath.Clean(files[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := `"analyzer":"` + lifetime.Analyzer.Name + `","kind":"` + trace.KindRun + `"`; !strings.Contains(string(data), want) {
+		t.Fatalf("trace lacks %s:\n%s", want, data)
+	}
+}
+
+// command runs a binary the test chose, with arguments the test chose.
 func command(name string, args ...string) *exec.Cmd {
 	return exec.Command(name, args...) //nolint:gosec // G204: test-controlled binary and arguments
 }
 
-// build compiles this command into a temporary directory and returns the binary's path.
-func build(t *testing.T) string {
+// mainCommand runs main with args in a child process of the test binary.
+func mainCommand(t *testing.T, args ...string) *exec.Cmd {
 	t.Helper()
 
-	bin := filepath.Join(t.TempDir(), "gomemsafe")
+	cmd := command(testBinary(t), args...)
+	cmd.Env = mainEnviron(t)
 
-	out, err := command("go", "build", "-o", bin, ".").CombinedOutput()
-	if err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
+	return cmd
+}
+
+// mainEnviron is the environment in which the test binary runs main. The child writes its
+// coverage where the test binary does, so the coverage profile includes main.
+func mainEnviron(t *testing.T) []string {
+	t.Helper()
+
+	env := append(os.Environ(), mainEnv+"=1")
+
+	if testing.CoverMode() != "" {
+		dir := flag.Lookup("test.gocoverdir").Value.String()
+		if dir == "" {
+			dir = t.TempDir()
+		}
+
+		env = append(env, "GOCOVERDIR="+dir)
 	}
 
-	return bin
+	return env
+}
+
+func testBinary(t *testing.T) string {
+	t.Helper()
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return self
 }

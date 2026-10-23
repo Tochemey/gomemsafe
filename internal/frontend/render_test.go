@@ -122,6 +122,19 @@ func TestSnippetSkipsUnreadableFiles(t *testing.T) {
 	}
 }
 
+func TestLinesDropsFilesItCannotScan(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "long.go")
+
+	// A line longer than bufio.Scanner's limit.
+	if err := os.WriteFile(file, []byte("package p\n// "+strings.Repeat("x", 1<<17)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if ls := (sourceCache{}).lines(file); ls != nil {
+		t.Fatalf("lines = %d lines, want none for a file that cannot be scanned", len(ls))
+	}
+}
+
 func TestIdentWidthAndExpandTabs(t *testing.T) {
 	if identWidth("buf.Write") != 3 || identWidth("(x") != 1 || identWidth("") != 1 {
 		t.Fatal("identWidth miscounts")

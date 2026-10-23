@@ -188,6 +188,43 @@ func TestAnalyzeReturnsNilPastBudget(t *testing.T) {
 	}
 }
 
+// TestPhiWithNoReachableEdgeIsNotInvalid checks the answer for a phi none of whose
+// predecessors was reached. The engine never asks, because it reaches a block only from a
+// reached predecessor, but nothing would prove the phi invalid.
+func TestPhiWithNoReachableEdgeIsNotInvalid(t *testing.T) {
+	fn := build(t).Func("bothPhi")
+	a := invalidation.Analyze(fn, lookup, new(flow.Engine))
+
+	var phi *ssa.Phi
+
+	for _, b := range fn.Blocks {
+		for _, instr := range b.Instrs {
+			if p, ok := instr.(*ssa.Phi); ok && phi == nil {
+				phi = p
+			}
+		}
+	}
+
+	var all, state flow.Bitset
+
+	all.Reset(a.N())
+	all.Fill()
+	state.Reset(a.N())
+	state.Fill()
+
+	a.Phi(phi, func(int) *flow.Bitset { return &all }, &state)
+
+	if !state.Equal(&all) {
+		t.Fatal("a phi of invalid values on every edge is not invalid")
+	}
+
+	a.Phi(phi, func(int) *flow.Bitset { return nil }, &state)
+
+	if state.Equal(&all) {
+		t.Fatal("a phi with no reachable edge is invalid")
+	}
+}
+
 func TestInvalidAtReturn(t *testing.T) {
 	pkg := build(t)
 

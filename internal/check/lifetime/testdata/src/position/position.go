@@ -128,3 +128,13 @@ func mapWritten() {
 
 	m["k"] = 1 // want `MS301: m used after it was returned to sync.Pool`
 }
+
+// sink takes a box through an interface: the call is dynamic, and the box is an argument.
+type sink interface{ take(b *box) }
+
+func passedToInterface(s sink) {
+	b := new(box)
+	pool.Put(b)
+
+	s.take(b) // want `MS301: b used after it was returned to sync.Pool`
+}

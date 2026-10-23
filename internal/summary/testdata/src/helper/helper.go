@@ -91,3 +91,9 @@ func Recycle[T any](x T) { // want Recycle:`invalidates\(0x1\)`
 	var p Pool[T]
 	p.Put(x)
 }
+
+// ReleaseFirstOfMany returns its first argument to the pool, but a fact has one bit per
+// argument and it has 65, so it gets no summary.
+func ReleaseFirstOfMany(b *bytes.Buffer, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ int) {
+	pool.Put(b)
+}

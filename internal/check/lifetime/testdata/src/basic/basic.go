@@ -37,6 +37,13 @@ func straightLine(p string) {
 	buf.WriteString(p) // want `MS301: buf used after it was returned to sync.Pool`
 }
 
+// parenthesized names the value inside the parentheses.
+func parenthesized(p string) {
+	buf := pool.Get().(*bytes.Buffer)
+	pool.Put((buf))
+	buf.WriteString(p) // want `MS301: buf used after it was returned to sync.Pool`
+}
+
 func useInLoop(n int) {
 	buf := pool.Get().(*bytes.Buffer)
 	pool.Put(buf)
