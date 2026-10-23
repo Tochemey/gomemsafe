@@ -29,6 +29,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tochemey/gomemsafe/internal/check/lifetime"
+	"github.com/tochemey/gomemsafe/internal/check/unsafeflow"
 )
 
 func TestVetToolModeDescribesFlags(t *testing.T) {
@@ -42,14 +45,20 @@ func TestVetToolModeDescribesFlags(t *testing.T) {
 		t.Fatalf("-flags output is not JSON: %v\n%s", err, out)
 	}
 
-	found := false
+	// An analyzer and an analyzer option: go vet passes on only the flags listed here.
+	safety := unsafeflow.Analyzer.Name + "." + unsafeflow.SafetyFlag
+	want := map[string]bool{lifetime.Analyzer.Name: false, safety: false}
 
 	for _, f := range flags {
-		found = found || f.Name == "lifetime"
+		if _, ok := want[f.Name]; ok {
+			want[f.Name] = true
+		}
 	}
 
-	if !found {
-		t.Fatalf("-flags lacks the lifetime analyzer: %s", out)
+	for name, found := range want {
+		if !found {
+			t.Errorf("-flags lacks %s: %s", name, out)
+		}
 	}
 }
 

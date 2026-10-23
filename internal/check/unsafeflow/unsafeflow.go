@@ -20,8 +20,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package unsafeflow is the family of checks on unsafe.Pointer, MS101 to MS104. MS101 and
-// MS103 are implemented.
+// Package unsafeflow is the family of checks on unsafe.Pointer, MS101 to MS104. MS101, MS103,
+// and MS104 are implemented.
 //
 // MS101 is a uintptr turned back into a pointer in a way plain vet cannot see. vet's unsafeptr
 // pass already reports every conversion from a uintptr to unsafe.Pointer outside the forms the
@@ -48,6 +48,9 @@
 // it is the real slice's or string's pointer, which is correct, and through a header value it
 // is the same misuse. Only reflect's two header types are recognised, and only a header value
 // written directly: one embedded in another struct is not followed.
+//
+// MS104, enabled by the -unsafeflow.safety flag, is an unsafe operation that no // SAFETY:
+// comment justifies (file safety.go).
 //
 // In generic code, a type parameter counts as a uintptr, or as a pointer, only when every type
 // its constraint allows is one. Only these direct expressions are recognised: an address passed
@@ -77,7 +80,12 @@ const (
 	RoundTripID = catalog.UnsafePointerRoundTrip
 	// HeaderID is the check ID of a reflect header value used as memory.
 	HeaderID = catalog.ReflectHeaderMisuse
+	// SafetyID is the check ID of an unsafe operation without a // SAFETY: comment.
+	SafetyID = catalog.UnjustifiedUnsafe
 )
+
+// SafetyFlag is the analyzer flag that enables MS104, -unsafeflow.safety on the command line.
+const SafetyFlag = "safety"
 
 // Diagnostic texts. The source text of the uintptr or header is the first %s after the ID.
 const (
@@ -103,7 +111,8 @@ const (
 var Analyzer = &analysis.Analyzer{
 	Name: "unsafeflow",
 	Doc: "reports uintptr values turned back into pointers in ways go vet's unsafeptr cannot see (MS101), " +
-		"and reflect header values used as memory (MS103)",
+		"reflect header values used as memory (MS103), and, with -unsafeflow.safety, unsafe operations " +
+		"without a // SAFETY: comment (MS104)",
 	Requires: []*analysis.Analyzer{directive.Analyzer, inspect.Analyzer},
 	Run:      run,
 }
@@ -137,6 +146,10 @@ func run(pass *analysis.Pass) (any, error) {
 			reportAt(pass, RoundTripID, call.Pos(), fmt.Sprintf(msgAddToNil, RoundTripID), helpAddToNil)
 		}
 	})
+
+	if enforceSafety {
+		reportUnjustified(pass, insp)
+	}
 
 	return nil, nil
 }
@@ -211,7 +224,8 @@ func matchReinterpretation(info *types.Info, call *ast.CallExpr) (ast.Expr, bool
 
 // isAddToNil matches unsafe.Add(nil, n) where n is not the constant zero.
 func isAddToNil(info *types.Info, call *ast.CallExpr) bool {
-	if len(call.Args) != 2 || !isUnsafeAdd(info, call.Fun) || !isNil(info, call.Args[0]) {
+	name, ok := unsafeBuiltin(info, call.Fun)
+	if !ok || name != addBuiltin || len(call.Args) != 2 || !isNil(info, call.Args[0]) {
 		return false
 	}
 
@@ -283,7 +297,8 @@ func convertedType(info *types.Info, call *ast.CallExpr) (types.Type, bool) {
 	return tv.Type, true
 }
 
-func isUnsafeAdd(info *types.Info, fun ast.Expr) bool {
+// unsafeBuiltin returns the name of the package unsafe builtin that fun names, such as Add.
+func unsafeBuiltin(info *types.Info, fun ast.Expr) (string, bool) {
 	var id *ast.Ident
 
 	switch f := ast.Unparen(fun).(type) {
@@ -292,12 +307,15 @@ func isUnsafeAdd(info *types.Info, fun ast.Expr) bool {
 	case *ast.Ident:
 		id = f
 	default:
-		return false
+		return "", false
 	}
 
 	b, ok := info.Uses[id].(*types.Builtin)
+	if !ok || b.Pkg() != types.Unsafe {
+		return "", false
+	}
 
-	return ok && b.Name() == addBuiltin && b.Pkg() == types.Unsafe
+	return b.Name(), true
 }
 
 // isNil reports whether e is nil, possibly converted to other pointer types first.

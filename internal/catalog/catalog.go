@@ -44,6 +44,9 @@ const (
 	// ReflectHeaderMisuse is a reflect.SliceHeader or reflect.StringHeader value used as
 	// memory, whose Data field the garbage collector does not follow.
 	ReflectHeaderMisuse ID = "MS103"
+	// UnjustifiedUnsafe is an unsafe operation that no // SAFETY: comment justifies. It is
+	// opt-in.
+	UnjustifiedUnsafe ID = "MS104"
 	// UseAfterInvalidation is a use of a value after a call took it back, such as a use after
 	// sync.Pool.Put.
 	UseAfterInvalidation ID = "MS301"
@@ -52,7 +55,6 @@ const (
 // Planned checks. Their IDs are reserved so that code can be annotated ahead of the check.
 const (
 	MutatedStringView     ID = "MS102"
-	UnjustifiedUnsafe     ID = "MS104"
 	GoPointerToC          ID = "MS201"
 	UseAfterCFree         ID = "MS202"
 	CAllocationLeak       ID = "MS203"
