@@ -145,6 +145,44 @@ func returned(buf *bytes.Buffer) []byte {
 	return b // want `MS302: b used after buf.Reset ended the views into buf`
 }
 
+type holder struct{ f []byte }
+
+func storedInField(buf *bytes.Buffer, h *holder) {
+	b := buf.Bytes()
+	buf.Reset()
+	h.f = b // want `MS302: b used after buf.Reset ended the views into buf`
+}
+
+func storedInMap(buf *bytes.Buffer, m map[string][]byte) {
+	b := buf.Bytes()
+	buf.Reset()
+	m["k"] = b // want `MS302: b used after buf.Reset ended the views into buf`
+}
+
+func storedThroughPointer(buf *bytes.Buffer, p *[]byte) {
+	b := buf.Bytes()
+	buf.Reset()
+	*p = b // want `MS302: b used after buf.Reset ended the views into buf`
+}
+
+func inLiteral(buf *bytes.Buffer) holder {
+	b := buf.Bytes()
+	buf.Reset()
+
+	return holder{f: b} // want `MS302: b used after buf.Reset ended the views into buf`
+}
+
+// sentInSelect sends the view in the second case: the diagnostic points at that case's value.
+func sentInSelect(buf *bytes.Buffer, ch chan []byte, other []byte) {
+	b := buf.Bytes()
+	buf.Reset()
+	select {
+	case ch <- other:
+	case ch <- b: // want `MS302: b used after buf.Reset ended the views into buf`
+	default:
+	}
+}
+
 func sent(buf *bytes.Buffer, ch chan<- []byte) {
 	b := buf.Bytes()
 	buf.Reset()

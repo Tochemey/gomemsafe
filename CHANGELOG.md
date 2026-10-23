@@ -9,6 +9,7 @@
 - MS103 reports a `reflect.SliceHeader` or `reflect.StringHeader` value used as memory.
 - MS104 reports an `unsafe` operation without a `// SAFETY:` comment, enabled with `-unsafeflow.safety`.
 - MS000 reports a `//memsafe:` directive that is malformed or not supported.
+- Findings name and point at the value used, including in assignments, composite literals, conversions, returns, channel sends, `select` cases, `range` loops, and `go` and `defer` calls.
 - `//memsafe:allow <checks> <reason>` suppresses findings on its line and the next, with a mandatory reason.
 - `go tool gomemsafe` prints each finding with its source line, related positions, and a help text.
 - `-json` prints go vet's JSON output unchanged.

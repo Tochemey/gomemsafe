@@ -42,6 +42,7 @@
 package lifetime
 
 import (
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -155,11 +156,9 @@ func (c *checker) usePos(u invalidation.Use) token.Pos {
 		return expr.Pos()
 	}
 
-	if pos := u.Instr.Pos(); pos.IsValid() {
-		return pos
-	}
-
-	return u.Site.Call.Pos()
+	// A use with no operand found is shown at its instruction, or at the site when SSA gives the
+	// instruction no position.
+	return cmp.Or(u.Instr.Pos(), u.Site.Call.Pos())
 }
 
 // useOperand returns the source expression that carries the used value, or nil when it cannot
@@ -171,12 +170,7 @@ func (c *checker) useOperand(u invalidation.Use) ast.Expr {
 		}
 	}
 
-	pos := u.Instr.Pos()
-	if !pos.IsValid() {
-		return nil
-	}
-
-	return c.operandAt(u.Instr, u.Value, pos)
+	return c.operandAt(u.Instr, u.Value, u.Instr.Pos())
 }
 
 // callOperand returns the source expression of v in call: its receiver or one of its
@@ -219,6 +213,10 @@ func (c *checker) operandAt(instr ssa.Instruction, v ssa.Value, pos token.Pos) a
 	}
 
 	path, _ := astutil.PathEnclosingInterval(file, pos, pos)
+	if expr := storedOperand(instr, v, path, pos); expr != nil {
+		return expr
+	}
+
 	for _, n := range path {
 		switch e := n.(type) {
 		case *ast.SelectorExpr:
@@ -257,6 +255,11 @@ func (c *checker) operandAt(instr ssa.Instruction, v ssa.Value, pos token.Pos) a
 			// A conversion, such as string(b): SSA places it at the parenthesis.
 			if e.Lparen == pos && len(e.Args) == 1 {
 				return e.Args[0]
+			}
+		case *ast.RangeStmt:
+			// A range over a map or a channel: SSA places it at the for keyword.
+			if e.For == pos {
+				return e.X
 			}
 		case *ast.SendStmt:
 			if e.Arrow == pos {
@@ -406,6 +409,67 @@ func argExpr(call *ast.CallExpr, args []ssa.Value, v ssa.Value, skip int) ast.Ex
 	for i, a := range args {
 		if a == v && i >= skip && i-skip < len(call.Args) {
 			return call.Args[i-skip]
+		}
+	}
+
+	return nil
+}
+
+// storedOperand returns the source of v when instr stores it. SSA places a store inside the
+// left-hand side it writes, such as at f in h.f = b, so the stored value is the right-hand side
+// of that assignment; a field of a composite literal is placed at its colon; and a select is
+// placed at its keyword, with its cases in source order.
+func storedOperand(instr ssa.Instruction, v ssa.Value, path []ast.Node, pos token.Pos) ast.Expr {
+	switch x := instr.(type) {
+	case *ssa.Store:
+		if x.Val != v {
+			return nil
+		}
+	case *ssa.MapUpdate:
+		if x.Value != v {
+			return nil
+		}
+	case *ssa.Select:
+	default:
+		return nil
+	}
+
+	for _, n := range path {
+		switch e := n.(type) {
+		case *ast.SelectStmt:
+			if sel, ok := instr.(*ssa.Select); ok && e.Select == pos {
+				return sentOperand(sel, v, e)
+			}
+		case *ast.KeyValueExpr:
+			if e.Colon == pos {
+				return e.Value
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range e.Lhs {
+				if len(e.Lhs) == len(e.Rhs) && lhs.Pos() <= pos && pos < lhs.End() {
+					return e.Rhs[i]
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// sentOperand returns the value a case of the select statement stmt sends, when it sends v.
+// The select's states are its cases in source order, the default left out.
+func sentOperand(sel *ssa.Select, v ssa.Value, stmt *ast.SelectStmt) ast.Expr {
+	var cases []*ast.CommClause
+
+	for _, s := range stmt.Body.List {
+		if clause := s.(*ast.CommClause); clause.Comm != nil {
+			cases = append(cases, clause)
+		}
+	}
+
+	for i, state := range sel.States {
+		if send, ok := cases[i].Comm.(*ast.SendStmt); ok && state.Send == v {
+			return send.Value
 		}
 	}
 
