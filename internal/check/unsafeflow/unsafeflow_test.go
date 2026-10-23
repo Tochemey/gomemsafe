@@ -30,30 +30,26 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
+	"github.com/tochemey/gomemsafe/internal/catalog"
 	"github.com/tochemey/gomemsafe/internal/check/unsafeflow"
 )
 
 func TestReportsRoundTripsVetCannotSee(t *testing.T) {
 	results := analysistest.Run(t, analysistest.TestData(), unsafeflow.Analyzer, "roundtrip")
-	for _, r := range results {
-		for _, d := range r.Diagnostics {
-			if d.Category != string(unsafeflow.ID) {
-				t.Errorf("%q: category %q, want %s", d.Message, d.Category, unsafeflow.ID)
-			}
-
-			if len(d.SuggestedFixes) != 1 || d.SuggestedFixes[0].Message == "" {
-				t.Errorf("%q: no help text", d.Message)
-			}
-		}
-	}
+	checkCategoryAndHelp(t, results, unsafeflow.RoundTripID)
 }
 
-// TestPointsAtTheUintptr checks that each reinterpretation finding's column is where the
-// uintptr it names is written: u in &u, not the &.
-func TestPointsAtTheUintptr(t *testing.T) {
-	name := regexp.MustCompile(`^MS101: \*?([\w.]+) is a uintptr`)
+func TestReportsReflectHeaderValues(t *testing.T) {
+	results := analysistest.Run(t, analysistest.TestData(), unsafeflow.Analyzer, "header")
+	checkCategoryAndHelp(t, results, unsafeflow.HeaderID)
+}
 
-	results := analysistest.Run(t, analysistest.TestData(), unsafeflow.Analyzer, "roundtrip")
+// TestPointsAtTheNamedValue checks that each finding that names a uintptr or a header points
+// where that value is written: u in &u, not the &.
+func TestPointsAtTheNamedValue(t *testing.T) {
+	name := regexp.MustCompile(`^MS10[13]: \*?([\w.]+) is a`)
+
+	results := analysistest.Run(t, analysistest.TestData(), unsafeflow.Analyzer, "roundtrip", "header")
 	for _, r := range results {
 		for _, d := range r.Diagnostics {
 			m := name.FindStringSubmatch(d.Message)
@@ -82,4 +78,21 @@ func TestStaysSilentOnCorrectCodeAndVetFindings(t *testing.T) {
 
 func TestHonoursSuppressions(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), unsafeflow.Analyzer, "suppress")
+}
+
+// checkCategoryAndHelp checks that every finding is filed under id and carries help text.
+func checkCategoryAndHelp(t *testing.T, results []*analysistest.Result, id catalog.ID) {
+	t.Helper()
+
+	for _, r := range results {
+		for _, d := range r.Diagnostics {
+			if d.Category != id.String() {
+				t.Errorf("%q: category %q, want %s", d.Message, d.Category, id)
+			}
+
+			if len(d.SuggestedFixes) != 1 || d.SuggestedFixes[0].Message == "" {
+				t.Errorf("%q: no help text", d.Message)
+			}
+		}
+	}
 }

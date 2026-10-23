@@ -20,12 +20,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package unsafeflow is the family of checks on unsafe.Pointer, MS101 to MS104. MS101 is
-// implemented: a uintptr turned back into a pointer in a way plain vet cannot see.
+// Package unsafeflow is the family of checks on unsafe.Pointer, MS101 to MS104. MS101 and
+// MS103 are implemented.
 //
-// vet's unsafeptr pass already reports every conversion from a uintptr to unsafe.Pointer
-// outside the forms the unsafe package allows, so MS101 does not repeat it. It reports the two
-// routes that involve no such conversion:
+// MS101 is a uintptr turned back into a pointer in a way plain vet cannot see. vet's unsafeptr
+// pass already reports every conversion from a uintptr to unsafe.Pointer outside the forms the
+// unsafe package allows, so MS101 does not repeat it. It reports the two routes that involve
+// no such conversion:
 //
 //   - a uintptr's memory read or written as a pointer, such as
 //     *(*unsafe.Pointer)(unsafe.Pointer(&u)), with any pointer, map, channel, or function type
@@ -38,6 +39,15 @@
 // updated the address when the memory moved. An address outside that memory, such as machine
 // code or memory from C or mmap, is reported too, because nothing in the code tells the two
 // apart; such a finding is suppressed with //memsafe:allow MS101 and the reason.
+//
+// MS103 is a reflect.SliceHeader or reflect.StringHeader value whose address is taken as an
+// unsafe.Pointer, such as *(*[]byte)(unsafe.Pointer(&h)). The reflect package allows the
+// header types only as pointers to a real slice or string: a header value's Data field is a
+// uintptr, so the slice or string made from it points at memory nothing keeps alive. A
+// header's Data field read as a pointer is MS103's too, not MS101's: through a header pointer
+// it is the real slice's or string's pointer, which is correct, and through a header value it
+// is the same misuse. Only reflect's two header types are recognised, and only a header value
+// written directly: one embedded in another struct is not followed.
 //
 // In generic code, a type parameter counts as a uintptr, or as a pointer, only when every type
 // its constraint allows is one. Only these direct expressions are recognised: an address passed
@@ -61,26 +71,47 @@ import (
 	"github.com/tochemey/gomemsafe/internal/report"
 )
 
-// ID is the check ID of a uintptr turned back into a pointer.
-const ID = catalog.UnsafePointerRoundTrip
+// Check IDs.
+const (
+	// RoundTripID is the check ID of a uintptr turned back into a pointer.
+	RoundTripID = catalog.UnsafePointerRoundTrip
+	// HeaderID is the check ID of a reflect header value used as memory.
+	HeaderID = catalog.ReflectHeaderMisuse
+)
 
-// Diagnostic texts. The uintptr's source text is the first %s after the ID.
+// Diagnostic texts. The source text of the uintptr or header is the first %s after the ID.
 const (
 	msgReinterpreted  = "%s: %s is a uintptr reinterpreted as a pointer"
 	helpReinterpreted = "keep the address in an unsafe.Pointer, which the garbage collector tracks, not in a uintptr"
 	msgAddToNil       = "%s: unsafe.Add on a nil pointer turns an integer into a pointer"
 	helpAddToNil      = "add the offset to the pointer the address came from: unsafe.Add(p, off)"
+	msgHeaderValue    = "%s: %s is a reflect.%s value: the garbage collector does not follow its Data field"
+	helpSliceHeader   = "build the slice with unsafe.Slice(ptr, len), not from a reflect.SliceHeader value"
+	helpStringHeader  = "build the string with unsafe.String(ptr, len), not from a reflect.StringHeader value"
 )
 
-// addBuiltin is the name of unsafe.Add.
-const addBuiltin = "Add"
+// Names in package unsafe and package reflect.
+const (
+	addBuiltin   = "Add"
+	reflectPath  = "reflect"
+	sliceHeader  = "SliceHeader"
+	stringHeader = "StringHeader"
+	dataField    = "Data"
+)
 
 // Analyzer is the unsafeflow check.
 var Analyzer = &analysis.Analyzer{
-	Name:     "unsafeflow",
-	Doc:      "reports uintptr values turned back into pointers in ways go vet's unsafeptr cannot see (MS101)",
+	Name: "unsafeflow",
+	Doc: "reports uintptr values turned back into pointers in ways go vet's unsafeptr cannot see (MS101), " +
+		"and reflect header values used as memory (MS103)",
 	Requires: []*analysis.Analyzer{directive.Analyzer, inspect.Analyzer},
 	Run:      run,
+}
+
+// headerHelp is keyed by the names of reflect's header types.
+var headerHelp = map[string]string{
+	sliceHeader:  helpSliceHeader,
+	stringHeader: helpStringHeader,
 }
 
 // run needs no facts-only short-circuit: unsafeflow requires no fact producer, so unitchecker
@@ -91,24 +122,56 @@ func run(pass *analysis.Pass) (any, error) {
 		call := n.(*ast.CallExpr)
 
 		if addr, ok := matchReinterpretation(pass.TypesInfo, call); ok {
-			value, text := locateUintptr(addr)
-			reportAt(pass, value.Pos(), fmt.Sprintf(msgReinterpreted, ID, text), helpReinterpreted)
+			reportReinterpretation(pass, addr)
+
+			return
+		}
+
+		if header, ok := matchHeaderValue(pass.TypesInfo, call); ok {
+			reportHeaderValue(pass, header)
 
 			return
 		}
 
 		if isAddToNil(pass.TypesInfo, call) {
-			reportAt(pass, call.Pos(), fmt.Sprintf(msgAddToNil, ID), helpAddToNil)
+			reportAt(pass, RoundTripID, call.Pos(), fmt.Sprintf(msgAddToNil, RoundTripID), helpAddToNil)
 		}
 	})
 
 	return nil, nil
 }
 
-func reportAt(pass *analysis.Pass, pos token.Pos, message, help string) {
+// reportReinterpretation reports the uintptr that addr points to, unless it is a reflect
+// header's Data field, which is MS103's.
+func reportReinterpretation(pass *analysis.Pass, addr ast.Expr) {
+	value, text := locateUintptr(addr)
+
+	field, isData := headerDataField(pass.TypesInfo, value)
+	if !isData {
+		reportAt(pass, RoundTripID, value.Pos(), fmt.Sprintf(msgReinterpreted, RoundTripID, text), helpReinterpreted)
+
+		return
+	}
+
+	// Through a header pointer, Data is the pointer word of the slice or string the header
+	// points at, so reading it as a pointer is correct. A header value embedded in another
+	// struct is not followed.
+	owner := ast.Unparen(field.X)
+	if _, isValue := headerName(pass.TypesInfo.TypeOf(owner)); isValue {
+		reportHeaderValue(pass, owner)
+	}
+}
+
+func reportHeaderValue(pass *analysis.Pass, header ast.Expr) {
+	name, _ := headerName(pass.TypesInfo.TypeOf(header))
+	message := fmt.Sprintf(msgHeaderValue, HeaderID, types.ExprString(header), name)
+	reportAt(pass, HeaderID, header.Pos(), message, headerHelp[name])
+}
+
+func reportAt(pass *analysis.Pass, id catalog.ID, pos token.Pos, message, help string) {
 	report.Report(pass, analysis.Diagnostic{
 		Pos:            pos,
-		Category:       ID.String(),
+		Category:       id.String(),
 		Message:        message,
 		SuggestedFixes: []analysis.SuggestedFix{{Message: help}},
 	})
@@ -155,6 +218,59 @@ func isAddToNil(info *types.Info, call *ast.CallExpr) bool {
 	offset := info.Types[call.Args[1]].Value
 
 	return offset == nil || constant.Sign(offset) != 0
+}
+
+// matchHeaderValue matches unsafe.Pointer(&h), where h is a reflect header value, and returns
+// h.
+func matchHeaderValue(info *types.Info, call *ast.CallExpr) (ast.Expr, bool) {
+	if t, ok := convertedType(info, call); !ok || !isUnsafePointer(t) {
+		return nil, false
+	}
+
+	addr, ok := ast.Unparen(call.Args[0]).(*ast.UnaryExpr)
+	if !ok || addr.Op != token.AND {
+		return nil, false
+	}
+
+	header := ast.Unparen(addr.X)
+	_, isHeader := headerName(info.TypeOf(header))
+
+	return header, isHeader
+}
+
+// headerDataField returns value as a selector if it selects the Data field of a reflect header,
+// directly or through an embedded field.
+func headerDataField(info *types.Info, value ast.Expr) (*ast.SelectorExpr, bool) {
+	field, ok := ast.Unparen(value).(*ast.SelectorExpr)
+	if !ok {
+		return nil, false
+	}
+
+	v, ok := info.Uses[field.Sel].(*types.Var)
+	if !ok || v.Pkg() == nil || v.Pkg().Path() != reflectPath {
+		return nil, false
+	}
+
+	return field, v.Name() == dataField
+}
+
+// headerName returns the name of t if t is reflect.SliceHeader or reflect.StringHeader.
+func headerName(t types.Type) (string, bool) {
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return "", false
+	}
+
+	obj := named.Obj()
+	if obj.Pkg() == nil || obj.Pkg().Path() != reflectPath {
+		return "", false
+	}
+
+	if _, isHeader := headerHelp[obj.Name()]; !isHeader {
+		return "", false
+	}
+
+	return obj.Name(), true
 }
 
 // convertedType returns the type a conversion converts to, if call is a conversion.

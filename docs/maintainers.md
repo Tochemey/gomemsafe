@@ -20,7 +20,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
                       ├─ lazyssa      SSA for the package, built only if asked
                       ├─ summary      per-function Invalidates facts → .vetx (all packages)
                       └─ checks       lifetime (MS301), skipped in facts-only runs;
-                                      unsafeflow (MS101), not run in facts-only runs
+                                      unsafeflow (MS101, MS103), not run in facts-only runs
                            └─ lifetime: invalidation + flow, must-dataflow on SSA
                            └─ report: emits diagnostics, honouring //memsafe:allow
   └─ frontend decodes the JSON, renders it, exits 0 / 1 / 2
@@ -34,7 +34,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `cmd/gomemsafe` | The binary; picks front-end or vet-tool mode | analyzers, frontend, trace, vetmode |
 | `internal/catalog` | The stable check IDs (`MS301`, …), implemented and planned | — |
 | `internal/check/lifetime` | MS301, use after invalidation | engine packages, report |
-| `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it | catalog, directive, report |
+| `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it; MS103, a reflect header value used as memory | catalog, directive, report |
 | `internal/cmd/bench` | Development command: the benchmark harness (design §7.1) | frontend, trace |
 | `internal/cmd/rsswrap` | Development command: `-toolexec` wrapper recording each compile's peak RSS | trace |
 | `internal/directive` | `//memsafe:` parsing; MS000 | catalog, vetmode |

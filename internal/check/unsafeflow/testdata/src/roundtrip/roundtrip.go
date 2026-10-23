@@ -24,11 +24,18 @@
 // uintptr-to-unsafe.Pointer conversion appears. MS101 must report each one.
 package roundtrip
 
-import "unsafe"
+import (
+	"addresses"
+	"reflect"
+	"unsafe"
+)
 
 type T struct{ a, b int64 }
 
 type holder struct{ addr uintptr }
+
+// record has a uintptr field named like a reflect header's, which makes it no header.
+type record struct{ Data uintptr }
 
 // address is a named uintptr type.
 type address uintptr
@@ -130,4 +137,17 @@ func genericEmbeddedConstraint[U interface{ addressConstraint }](a *U) unsafe.Po
 
 func genericTarget[P pointerConstraint](u uintptr) P {
 	return *(*P)(unsafe.Pointer(&u)) // want `MS101: u is a uintptr reinterpreted as a pointer`
+}
+
+func throughOtherPackage() unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&addresses.Saved)) // want `MS101: addresses.Saved is a uintptr reinterpreted as a pointer`
+}
+
+// throughReflectField reads a uintptr field of package reflect that is not a header's Data.
+func throughReflectField(f *reflect.StructField) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&f.Offset)) // want `MS101: f.Offset is a uintptr reinterpreted as a pointer`
+}
+
+func throughFieldNamedData(r *record) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&r.Data)) // want `MS101: r.Data is a uintptr reinterpreted as a pointer`
 }

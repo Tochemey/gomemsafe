@@ -20,8 +20,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package falsepos holds correct unsafe code, and uintptr round trips that plain vet already
-// reports. MS101 reports none of them: it covers only what vet cannot see.
+// Package falsepos holds correct unsafe code, and misuses that plain vet already reports.
+// MS101 and MS103 report none of them: they cover only what vet cannot see.
 package falsepos
 
 import "unsafe"
