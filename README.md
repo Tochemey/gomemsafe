@@ -4,20 +4,24 @@
 [![codecov](https://img.shields.io/codecov/c/github/Tochemey/gomemsafe/main?label=coverage)](https://codecov.io/gh/Tochemey/gomemsafe)
 [![license](https://img.shields.io/github/license/Tochemey/gomemsafe)](LICENSE)
 
-A build-time static analyser that brings Rust-style memory-safety guarantees to Go. It
-catches data-race patterns, misuse of `unsafe` and cgo, use of `sync.Pool` values and
-borrowed buffer views after they become invalid, and (for code you annotate)
-use-after-move and escaping borrows. It has zero runtime cost and needs no language change.
+A build-time static analyser that brings Rust-style memory-safety checks to Go. It finds memory
+used after its owner has let it go, such as a value returned to a `sync.Pool` or a slice of a
+buffer that has since been reset, and `unsafe` code that hides pointers from the garbage
+collector. It runs as a `go vet` tool, with zero runtime cost and no language change.
 
-> **Status: M1, the second of five [milestones](docs/design.md#10-milestones), in progress.**
-> Five checks are implemented: **MS301**, a value used after it was returned to a
-> `sync.Pool`, including through helper functions in other packages; **MS302**, a view such as
-> the slice from `bytes.Buffer.Bytes` or `bufio.Scanner.Bytes` used after a call on its owner
-> ended it; **MS101**, a `uintptr`
-> turned back into a pointer in a way `go vet` cannot see; **MS103**, a
-> `reflect.SliceHeader` or `StringHeader` value used as memory; and **MS104**, opt-in, an
-> `unsafe` operation without a `// SAFETY:` comment. The other checks in the
-> [check catalogue](docs/design.md#5-check-catalogue) arrive with the later milestones.
+## Checks
+
+| ID | Reports |
+|---|---|
+| **MS301** | A value used after it was returned to a `sync.Pool`, including through helper functions in other packages |
+| **MS302** | A view, such as the slice from `bytes.Buffer.Bytes` or `bufio.Scanner.Bytes`, used after a call on its buffer ended it |
+| **MS101** | A `uintptr` turned back into a pointer in a way `go vet` cannot see |
+| **MS103** | A `reflect.SliceHeader` or `reflect.StringHeader` value used as memory |
+| **MS104** | An `unsafe` operation without a `// SAFETY:` comment (opt-in: `-unsafeflow.safety`) |
+
+Every check, with its exact rules and its limits, is defined in the
+[check catalogue](docs/design.md#5-check-catalogue). Changes are listed in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Quick start
 
@@ -102,15 +106,14 @@ so the cost after an edit is roughly proportional to the code that changed.
 ## How it relates to existing tools
 
 gomemsafe complements plain `go vet`, so keep running it: its `unsafeptr`, `copylock`, and
-`cgocall` passes are on by default. gomemsafe's lock checks understand
-[gVisor checklocks](https://pkg.go.dev/gvisor.dev/gvisor/tools/checklocks) annotations as
-written. What it adds, and what no other tool provides, is lifetime checking of
-borrowed views (`sync.Pool`, `Buffer.Bytes()`, `Scanner.Bytes()`, `unsafe.String`),
-use-after-move, and borrow escape. All of it runs as one cached vet pass. See
-[design §1.1](docs/design.md#11-prior-art).
+`cgocall` passes are on by default, and gomemsafe reports only what they cannot see. What it
+adds, and what no other tool provides, is lifetime checking: a value returned to a
+`sync.Pool`, or a view of a `bytes.Buffer`, `bufio.Scanner`, `bufio.Reader`, or
+`bufio.Writer`, used after it stopped being valid. Values returned to a pool are followed
+through helper functions in other packages. All of it runs as one cached vet pass. See [design §1.1](docs/design.md#11-prior-art).
 
 ## What a clean run does and does not mean
 
-A clean Tier 1 run means none of the known hazard patterns were found. It is **not** a proof
-of memory safety. Only code annotated for Tier 2 or Tier 3 gets a Rust-style guarantee. Keep
-running `go test -race`. See [design §9](docs/design.md#9-known-limitations).
+A clean run means none of the patterns the checks report were found. It is **not** a proof of
+memory safety: each check states, in the catalogue, what it does not follow. Keep running
+`go test -race`. See [design §9](docs/design.md#9-known-limitations).
