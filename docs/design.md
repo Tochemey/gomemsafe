@@ -30,7 +30,7 @@ stays compatible with them rather than competing:
 
 | Tool | What it covers | Relationship to gomemsafe |
 |---|---|---|
-| `go vet`: `unsafeptr`, `copylock`, `cgocall` | Single-expression `unsafe.Pointer` misuse, copied locks, some breaks of the cgo pointer rules | **Complementary.** Plain `go vet` already runs these by default, so keep running it. MS101 and MS201 add the flow tracking these passes lack, without duplicating them. |
+| `go vet`: `unsafeptr`, `copylock`, `cgocall` | Single-expression `unsafe.Pointer` misuse, copied locks, some breaks of the cgo pointer rules | **Complementary.** Plain `go vet` already runs these by default, so keep running it. MS101 covers the uintptr round trips `unsafeptr` cannot see, and MS201 adds the flow tracking `cgocall` lacks, without duplicating either. |
 | [gVisor checklocks](https://pkg.go.dev/gvisor.dev/gvisor/tools/checklocks) | Lock and atomic contracts through `+checklocks:mu` annotations | **Annotation-compatible.** MS403 uses its syntax verbatim and is implemented in our engine ([D6](decisions.md)). |
 | [go-safer](https://github.com/jlauinger/go-safer) | `reflect.SliceHeader`/`StringHeader` misuse; unsafe struct casts (last release 2020) | Overlaps MS103. We cover the same patterns inside the shared engine. |
 | [Chronos](https://github.com/amit-davidson/Chronos) | Whole-program static race detection; by its own README it struggles with large programs and ignores channels and WaitGroups (inactive since 2022) | A whole-program approach; its limitations are why [D5](decisions.md) checks narrow patterns instead. |
@@ -86,7 +86,7 @@ of it run as one cached vet pass.
 | Lifetimes on borrows | Use after `sync.Pool.Put`; `Buffer.Bytes()`/`Scanner.Bytes()` views that outlive their validity | MS301–MS303 | 1 |
 | Aliasing XOR mutation | Mutating the `[]byte` behind an `unsafe.String`; `append` aliasing | MS102, MS503 | 1 / 2 |
 | `Send` / `Sync` | Goroutine-captured variables written without a happens-before edge; concurrent map writes; unguarded fields | MS401–MS403 | 1 (+ annotations) |
-| `unsafe` is quarantined and justified | `unsafe.Pointer` → `uintptr` round-trips across statements; `reflect.SliceHeader`; unjustified `unsafe` | MS101, MS103, MS104 | 1 |
+| `unsafe` is quarantined and justified | A `uintptr` turned back into a pointer where vet cannot see it; `reflect.SliceHeader`; unjustified `unsafe` | MS101, MS103, MS104 | 1 |
 | FFI hygiene | Breaking cgo pointer rules; use of C memory after `C.free`; double free | MS201–MS203 | 1 |
 | Ownership / move | A value sent on a channel or handed to a consuming function, then used again | MS501 | 2 |
 | Borrows do not escape | A borrowed parameter retained in a field, a global, a goroutine, or a return value | MS502 | 2 |
@@ -202,7 +202,7 @@ applies, so the command line never mentions tiers.
 
 | ID | Check | Example |
 |---|---|---|
-| MS101 | `unsafe.Pointer` → `uintptr` → `unsafe.Pointer` round-trip across statements, or through a local variable. Extends vet `unsafeptr`, which only sees single expressions. | `u := uintptr(p); …; q := unsafe.Pointer(u + off)` |
+| MS101 | A `uintptr` turned back into a pointer without a conversion vet can see: its memory read as a pointer type, or `unsafe.Add` on a nil pointer. Vet's `unsafeptr` already reports every `uintptr`-to-`unsafe.Pointer` conversion outside the allowed forms, so MS101 does not repeat those. An address outside the Go heap (machine code, C or `mmap` memory) is reported too; suppress it with a reason. | `*(*unsafe.Pointer)(unsafe.Pointer(&u))` / `unsafe.Add(nil, u)` |
 | MS102 | A `[]byte` mutated while a live `unsafe.String`/`unsafe.Slice` view of it exists. This breaks string immutability. | `s := unsafe.String(&b[0], n); b[0] = 'x'; use(s)` |
 | MS103 | `reflect.SliceHeader` / `reflect.StringHeader` constructed or converted to a pointer | — |
 | MS104 | *(opt-in: `-unsafeflow.safety`)* An `unsafe` operation without a preceding `// SAFETY:` justification comment (like clippy's `undocumented_unsafe_blocks`) | — |

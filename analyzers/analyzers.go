@@ -34,13 +34,14 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/tochemey/gomemsafe/internal/check/lifetime"
+	"github.com/tochemey/gomemsafe/internal/check/unsafeflow"
 	"github.com/tochemey/gomemsafe/internal/directive"
 )
 
 // All returns every gomemsafe check. Analyzers they depend on, such as the summary
 // analyzer that exports facts, run automatically through Requires.
 func All() []*analysis.Analyzer {
-	return []*analysis.Analyzer{directive.Analyzer, lifetime.Analyzer}
+	return []*analysis.Analyzer{directive.Analyzer, unsafeflow.Analyzer, lifetime.Analyzer}
 }
 
 // Default returns the checks that run when no analyzer is selected. Today that is every check;

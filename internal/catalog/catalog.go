@@ -38,6 +38,9 @@ type ID string
 const (
 	// MalformedDirective is a //memsafe: directive that cannot be parsed or is not supported.
 	MalformedDirective ID = "MS000"
+	// UnsafePointerRoundTrip is a uintptr turned back into a pointer in a way go vet's
+	// unsafeptr cannot see.
+	UnsafePointerRoundTrip ID = "MS101"
 	// UseAfterInvalidation is a use of a value after a call took it back, such as a use after
 	// sync.Pool.Put.
 	UseAfterInvalidation ID = "MS301"
@@ -45,24 +48,23 @@ const (
 
 // Planned checks. Their IDs are reserved so that code can be annotated ahead of the check.
 const (
-	UnsafePointerRoundTrip ID = "MS101"
-	MutatedStringView      ID = "MS102"
-	ReflectHeaderMisuse    ID = "MS103"
-	UnjustifiedUnsafe      ID = "MS104"
-	GoPointerToC           ID = "MS201"
-	UseAfterCFree          ID = "MS202"
-	CAllocationLeak        ID = "MS203"
-	UseOfInvalidatedView   ID = "MS302"
-	EscapingBorrowedView   ID = "MS303"
-	UnsynchronizedCapture  ID = "MS401"
-	ConcurrentMapAccess    ID = "MS402"
-	UnguardedField         ID = "MS403"
-	UseAfterMove           ID = "MS501"
-	EscapingBorrow         ID = "MS502"
-	AppendAliasing         ID = "MS503"
-	ForbiddenImport        ID = "MS901"
-	UnguardedSharedState   ID = "MS902"
-	UnspecificSuppression  ID = "MS903"
+	MutatedStringView     ID = "MS102"
+	ReflectHeaderMisuse   ID = "MS103"
+	UnjustifiedUnsafe     ID = "MS104"
+	GoPointerToC          ID = "MS201"
+	UseAfterCFree         ID = "MS202"
+	CAllocationLeak       ID = "MS203"
+	UseOfInvalidatedView  ID = "MS302"
+	EscapingBorrowedView  ID = "MS303"
+	UnsynchronizedCapture ID = "MS401"
+	ConcurrentMapAccess   ID = "MS402"
+	UnguardedField        ID = "MS403"
+	UseAfterMove          ID = "MS501"
+	EscapingBorrow        ID = "MS502"
+	AppendAliasing        ID = "MS503"
+	ForbiddenImport       ID = "MS901"
+	UnguardedSharedState  ID = "MS902"
+	UnspecificSuppression ID = "MS903"
 )
 
 // known lists every ID in the catalogue, implemented or planned, in catalogue order.

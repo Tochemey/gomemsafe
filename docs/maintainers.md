@@ -19,8 +19,9 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
                       ├─ prefilter    which function calls which static callee
                       ├─ lazyssa      SSA for the package, built only if asked
                       ├─ summary      per-function Invalidates facts → .vetx (all packages)
-                      └─ checks       lifetime (MS301), skipped in facts-only runs
-                           └─ invalidation + flow: must-dataflow on SSA
+                      └─ checks       lifetime (MS301), skipped in facts-only runs;
+                                      unsafeflow (MS101), not run in facts-only runs
+                           └─ lifetime: invalidation + flow, must-dataflow on SSA
                            └─ report: emits diagnostics, honouring //memsafe:allow
   └─ frontend decodes the JSON, renders it, exits 0 / 1 / 2
 ```
@@ -33,6 +34,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `cmd/gomemsafe` | The binary; picks front-end or vet-tool mode | analyzers, frontend, trace, vetmode |
 | `internal/catalog` | The stable check IDs (`MS301`, …), implemented and planned | — |
 | `internal/check/lifetime` | MS301, use after invalidation | engine packages, report |
+| `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it | catalog, directive, report |
 | `internal/cmd/bench` | Development command: the benchmark harness (design §7.1) | frontend, trace |
 | `internal/cmd/rsswrap` | Development command: `-toolexec` wrapper recording each compile's peak RSS | trace |
 | `internal/directive` | `//memsafe:` parsing; MS000 | catalog, vetmode |
@@ -72,7 +74,10 @@ Functions that only *call* such a function need nothing: `summary` derives their
    catalogue).
 2. Create `internal/check/<family>/<family>.go` with an `Analyzer` that:
    - requires what it needs (usually `directive`, `prefilter`, `lazyssa`, `summary`),
-   - returns immediately when `vetmode.FactsOnly()` is true, and records `trace.KindSkipped`,
+   - if it requires `summary`, returns immediately when `vetmode.FactsOnly()` is true and
+     records `trace.KindSkipped`. unitchecker runs such a check on every dependency only
+     because of the fact producer it requires; a check that requires none is not run there,
+     and needs no such guard,
    - emits every diagnostic through `report.Report`, with `Category` set to its ID,
    - exports no facts. If it needs cross-package knowledge, extend `summary.Fact` instead
      (decision D2).
