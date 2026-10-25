@@ -20,27 +20,32 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package unsafeflow_test
+package unsafeflow
 
 import (
+	"go/ast"
+	"go/constant"
 	"go/token"
+	"go/types"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/analysis/analysistest"
+	"golang.org/x/tools/go/ssa"
 
-	"github.com/tochemey/gomemsafe/internal/check/unsafeflow"
 	"github.com/tochemey/gomemsafe/internal/lazyssa"
 )
 
 func TestReportsStringsUsedAfterAWriteIntoTheirBytes(t *testing.T) {
-	results := analysistest.Run(t, analysistest.TestData(), unsafeflow.Analyzer, "mutation")
-	checkCategoryAndHelp(t, results, unsafeflow.MutationID)
-
+	results := analysistest.Run(t, analysistest.TestData(), Analyzer, "mutation")
 	for _, r := range results {
 		for _, d := range r.Diagnostics {
+			if d.Category != MutationID.String() || len(d.SuggestedFixes) != 1 || d.SuggestedFixes[0].Message == "" {
+				t.Errorf("%q: category %q and fixes %v, want %s with help", d.Message, d.Category, d.SuggestedFixes, MutationID)
+			}
+
 			if len(d.Related) != 2 || d.Related[0].Message == "" || d.Related[1].Message == "" {
 				t.Errorf("%q: related %v, want the view and the write", d.Message, d.Related)
 			}
@@ -48,8 +53,14 @@ func TestReportsStringsUsedAfterAWriteIntoTheirBytes(t *testing.T) {
 	}
 }
 
+// TestNamesAStringNoExpressionCarries covers a use whose source expression is not found: the
+// finding names the string in general.
+func TestNamesAStringNoExpressionCarries(t *testing.T) {
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "mutationunnamed")
+}
+
 func TestStaysSilentOnStringsWhoseBytesNoWriteChanges(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), unsafeflow.Analyzer, "mutationfalsepos")
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "mutationfalsepos")
 }
 
 // TestPointsAtTheStringTheViewAndTheWrite checks that each finding is where the string it names
@@ -59,7 +70,7 @@ func TestPointsAtTheStringTheViewAndTheWrite(t *testing.T) {
 	name := regexp.MustCompile(`^MS102: (\S+) used after`)
 	write := regexp.MustCompile(`\[|copy\(|clear\(|^\s*a = `)
 
-	results := analysistest.Run(t, analysistest.TestData(), unsafeflow.Analyzer, "mutation")
+	results := analysistest.Run(t, analysistest.TestData(), Analyzer, "mutation")
 	for _, r := range results {
 		for _, d := range r.Diagnostics {
 			m := name.FindStringSubmatch(d.Message)
@@ -90,10 +101,61 @@ func TestPointsAtTheStringTheViewAndTheWrite(t *testing.T) {
 func TestBuildsNoSSAWithoutStringViews(t *testing.T) {
 	before := lazyssa.Builds()
 
-	analysistest.Run(t, analysistest.TestData(), unsafeflow.Analyzer, "roundtrip", "header", "constview")
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "roundtrip", "header", "constview")
 
 	if got := lazyssa.Builds() - before; got != 0 {
 		t.Fatalf("built SSA for %d packages, want 0", got)
+	}
+}
+
+// TestConstIntIsOnlyANonNegativeExactInteger covers constants that valid Go never passes as an
+// index or a length: they are not constant offsets.
+func TestConstIntIsOnlyANonNegativeExactInteger(t *testing.T) {
+	huge := constant.Shift(constant.MakeInt64(1), token.SHL, 64)
+
+	for _, tc := range []struct {
+		v    ssa.Value
+		want int64
+	}{
+		{ssa.NewConst(constant.MakeInt64(3), types.Typ[types.Int]), 3},
+		{ssa.NewConst(constant.MakeInt64(-1), types.Typ[types.Int]), -1},
+		{ssa.NewConst(huge, types.Typ[types.Uint64]), -1},
+		{ssa.NewConst(constant.MakeString("x"), types.Typ[types.String]), -1},
+		{ssa.NewConst(nil, types.NewSlice(types.Typ[types.Byte])), -1},
+		{&ssa.Parameter{}, -1},
+	} {
+		if got := constInt(tc.v); got != tc.want {
+			t.Errorf("constInt(%v) = %d, want %d", tc.v, got, tc.want)
+		}
+	}
+}
+
+// TestNamesAnUnknownBufferInGeneral covers a view call that the call index does not hold, or
+// that has no arguments: the buffer is named in general.
+func TestNamesAnUnknownBufferInGeneral(t *testing.T) {
+	call := &ssa.Call{}
+	noArgs := map[token.Pos]*ast.CallExpr{call.Pos(): {Fun: ast.NewIdent("String")}}
+
+	for _, calls := range []map[token.Pos]*ast.CallExpr{{}, noArgs} {
+		if got := bufferText(calls, call); got != unknownOwnerText {
+			t.Errorf("bufferText = %q, want %q", got, unknownOwnerText)
+		}
+	}
+
+	if got := valueName(nil); got != unknownStringText {
+		t.Errorf("valueName(nil) = %q, want %q", got, unknownStringText)
+	}
+}
+
+// TestAliasesSkipValuesWithoutReferrers covers a class base with no referrer list, such as a
+// constant: it has no aliases to add.
+func TestAliasesSkipValuesWithoutReferrers(t *testing.T) {
+	m := &mutations{classOf: make(map[ssa.Value]int)}
+	m.class(ssa.NewConst(constant.MakeString("x"), types.Typ[types.String]))
+	m.closeOverAliases()
+
+	if len(m.classOf) != 1 {
+		t.Fatalf("%d values in classes, want only the constant", len(m.classOf))
 	}
 }
 

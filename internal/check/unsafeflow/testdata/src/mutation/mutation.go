@@ -185,3 +185,70 @@ func throughNamedType(b []byte) {
 	buffer(b)[0] = 'x'
 	use(s) // want `MS102: s used after a write to the bytes it shares`
 }
+
+// otherViews makes, beside the string it writes into, a []byte view of a []byte and one of a
+// constant, neither of which shares a string that can change.
+func otherViews(b []byte) {
+	s := unsafe.String(&b[0], len(b))
+	use(unsafe.Slice(&b[0], len(b)), unsafe.Slice(unsafe.StringData("abc"), 3))
+	b[0] = 'x'
+	use(s) // want `MS102: s used after a write to the bytes it shares`
+}
+
+func selected(b []byte, ch chan int) {
+	s := unsafe.String(&b[0], len(b))
+	b[0] = 'x'
+
+	select {
+	case <-ch:
+	default:
+	}
+
+	use(s) // want `MS102: s used after a write to the bytes it shares`
+}
+
+func twoStrings(a, b []byte) {
+	s := unsafe.String(&a[0], len(a))
+	t := unsafe.String(&b[0], len(b))
+	a[0] = 'x'
+	b[0] = 'y'
+	use(t) // want `MS102: t used after a write to the bytes it shares`
+	use(s) // want `MS102: s used after a write to the bytes it shares`
+}
+
+// writtenLaterInTheSource writes below the use, but on every path before it.
+func writtenLaterInTheSource(b []byte) {
+	s := unsafe.String(&b[0], len(b))
+	goto write
+
+used:
+	use(s) // want `MS102: s used after a write to the bytes it shares`
+
+	return
+
+write:
+	b[0] = 'x'
+
+	goto used
+}
+
+func twoViewsOfOneString(s string) {
+	v := unsafe.Slice(unsafe.StringData(s), len(s))
+	w := unsafe.Slice(unsafe.StringData(s), len(s))
+	w[0] = 'x'
+	use(v, s) // want `MS102: s used after a write to the bytes it shares`
+}
+
+func viewThenSlice(b []byte) {
+	s := unsafe.String(&b[0], len(b))
+	v := unsafe.Slice(unsafe.StringData(s), len(s))
+	v[0] = 'x'
+	use(s) // want `MS102: s used after a write to the bytes it shares`
+}
+
+func addressInVariable(b []byte) {
+	p := &b[0]
+	s := unsafe.String(p, len(b))
+	b[0] = 'x'
+	use(s) // want `MS102: s used after a write to the bytes it shares`
+}
