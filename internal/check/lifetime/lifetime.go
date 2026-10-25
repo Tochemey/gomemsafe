@@ -43,14 +43,12 @@
 package lifetime
 
 import (
-	"cmp"
 	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/ssa"
 
 	"github.com/tochemey/gomemsafe/internal/catalog"
@@ -58,6 +56,7 @@ import (
 	"github.com/tochemey/gomemsafe/internal/flow"
 	"github.com/tochemey/gomemsafe/internal/invalidation"
 	"github.com/tochemey/gomemsafe/internal/lazyssa"
+	"github.com/tochemey/gomemsafe/internal/locate"
 	"github.com/tochemey/gomemsafe/internal/prefilter"
 	"github.com/tochemey/gomemsafe/internal/report"
 	"github.com/tochemey/gomemsafe/internal/summary"
@@ -99,6 +98,7 @@ type checker struct {
 	pass  *analysis.Pass
 	sum   *summary.Result
 	calls map[token.Pos]*ast.CallExpr
+	loc   *locate.Locator
 	eng   flow.Engine
 }
 
@@ -118,7 +118,7 @@ func run(pass *analysis.Pass) (any, error) {
 
 	ssaRes := pass.ResultOf[lazyssa.Analyzer].(*lazyssa.Result)
 
-	c := &checker{pass: pass, sum: sum, calls: pre.Calls}
+	c := &checker{pass: pass, sum: sum, calls: pre.Calls, loc: locate.New(pass, pre.Calls)}
 
 	for _, f := range funcs {
 		fn := ssaRes.Func(f.Obj)
@@ -149,170 +149,14 @@ func (c *checker) function(fn *ssa.Function) {
 	}
 }
 
-// usePos returns the position of the used value in the source. SSA places many uses at an
-// operator: a call at its opening parenthesis, a field access at the field name, a comparison
-// at its operator. Those are mapped back to the operand that carries the value.
+// usePos returns where u's value is written in the source, or the site when SSA gives the use
+// no position.
 func (c *checker) usePos(u invalidation.Use) token.Pos {
-	if expr := c.useOperand(u); expr != nil {
-		return expr.Pos()
-	}
-
-	// A use with no operand found is shown at its instruction, or at the site when SSA gives the
-	// instruction no position.
-	return cmp.Or(u.Instr.Pos(), u.Site.Call.Pos())
+	return c.loc.UsePos(u.Instr, u.Value, u.Site.Call.Pos())
 }
 
-// useOperand returns the source expression that carries the used value, or nil when it cannot
-// be found. Calls include go and defer statements.
-func (c *checker) useOperand(u invalidation.Use) ast.Expr {
-	if call, ok := u.Instr.(ssa.CallInstruction); ok {
-		if expr := c.callOperand(call, u.Value); expr != nil {
-			return expr
-		}
-	}
-
-	return c.operandAt(u.Instr, u.Value, u.Instr.Pos())
-}
-
-// callOperand returns the source expression of v in call: its receiver or one of its
-// arguments. The call is found by its opening parenthesis, which is where a go or defer
-// statement's call starts too.
-func (c *checker) callOperand(call ssa.CallInstruction, v ssa.Value) ast.Expr {
-	expr, ok := c.calls[call.Common().Pos()]
-	if !ok {
-		return nil
-	}
-
-	recv, hasRecv := c.receiver(expr)
-
-	common := call.Common()
-	if common.IsInvoke() {
-		if hasRecv && common.Value == v {
-			return recv
-		}
-
-		return argExpr(expr, common.Args, v, 0)
-	}
-
-	if hasRecv {
-		if len(common.Args) > 0 && common.Args[0] == v {
-			return recv
-		}
-
-		return argExpr(expr, common.Args, v, 1)
-	}
-
-	return argExpr(expr, common.Args, v, 0)
-}
-
-// operandAt returns the operand that carries v in the expression whose operator is at pos,
-// the position SSA gives instr.
-func (c *checker) operandAt(instr ssa.Instruction, v ssa.Value, pos token.Pos) ast.Expr {
-	file := c.fileOf(pos)
-	if file == nil {
-		return nil
-	}
-
-	path, _ := astutil.PathEnclosingInterval(file, pos, pos)
-	if expr := storedOperand(instr, v, path, pos); expr != nil {
-		return expr
-	}
-
-	for _, n := range path {
-		switch e := n.(type) {
-		case *ast.SelectorExpr:
-			if e.Sel.Pos() == pos {
-				return e.X
-			}
-		case *ast.BinaryExpr:
-			if e.OpPos == pos {
-				if op, ok := instr.(*ssa.BinOp); ok && op.X != v {
-					return e.Y
-				}
-
-				return e.X
-			}
-		case *ast.IndexExpr:
-			if e.Lbrack == pos {
-				if isMapKey(instr, v) {
-					return e.Index
-				}
-
-				return e.X
-			}
-		case *ast.SliceExpr:
-			if e.Lbrack == pos {
-				return e.X
-			}
-		case *ast.StarExpr:
-			if e.Star == pos {
-				return e.X
-			}
-		case *ast.UnaryExpr:
-			if e.OpPos == pos {
-				return e.X
-			}
-		case *ast.CallExpr:
-			// A conversion, such as string(b): SSA places it at the parenthesis.
-			if e.Lparen == pos && len(e.Args) == 1 {
-				return e.Args[0]
-			}
-		case *ast.RangeStmt:
-			// A range over a map or a channel: SSA places it at the for keyword.
-			if e.For == pos {
-				return e.X
-			}
-		case *ast.SendStmt:
-			if e.Arrow == pos {
-				return e.Value
-			}
-		case *ast.ReturnStmt:
-			// A return: SSA places it at the keyword, with the results in order.
-			if ret, ok := instr.(*ssa.Return); ok && e.Return == pos && len(e.Results) == len(ret.Results) {
-				for i, result := range ret.Results {
-					if result == v {
-						return e.Results[i]
-					}
-				}
-			}
-		}
-	}
-
-	// A value stored as it is, such as an argument packed into a variadic call's slice, is
-	// placed at the value itself.
-	if id, ok := path[0].(*ast.Ident); ok && id.Pos() == pos {
-		return id
-	}
-
-	return nil
-}
-
-// fileOf returns the file of the current package that contains pos.
-func (c *checker) fileOf(pos token.Pos) *ast.File {
-	for _, f := range c.pass.Files {
-		if f.FileStart <= pos && pos <= f.FileEnd {
-			return f
-		}
-	}
-
-	return nil
-}
-
-// receiver returns the explicit receiver of a method call written as x.M(...). A method
-// expression, (*T).M(x, ...), has no explicit receiver: x is its first argument.
-func (c *checker) receiver(call *ast.CallExpr) (ast.Expr, bool) {
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok {
-		return nil, false
-	}
-
-	selection, ok := c.pass.TypesInfo.Selections[sel]
-	if !ok || selection.Kind() != types.MethodVal {
-		return nil, false
-	}
-
-	return sel.X, true
-}
+// useOperand returns the source expression of u's value, or nil when it cannot be found.
+func (c *checker) useOperand(u invalidation.Use) ast.Expr { return c.loc.Operand(u.Instr, u.Value) }
 
 func (c *checker) report(u invalidation.Use) {
 	if u.View != nil {
@@ -356,7 +200,7 @@ func (c *checker) siteArg(site invalidation.Site, arg int) ast.Expr {
 		return nil
 	}
 
-	if recv, ok := c.receiver(call); ok {
+	if recv, ok := c.loc.Receiver(call); ok {
 		if arg == 0 {
 			return recv
 		}
@@ -403,86 +247,6 @@ func calleeName(fn *types.Func) string {
 
 // byPackageName qualifies type names by package name.
 func byPackageName(pkg *types.Package) string { return pkg.Name() }
-
-// argExpr maps the SSA argument equal to v to its source argument; skip is the number of
-// leading SSA arguments with no source counterpart (the receiver).
-func argExpr(call *ast.CallExpr, args []ssa.Value, v ssa.Value, skip int) ast.Expr {
-	for i, a := range args {
-		if a == v && i >= skip && i-skip < len(call.Args) {
-			return call.Args[i-skip]
-		}
-	}
-
-	return nil
-}
-
-// storedOperand returns the source of v when instr stores it. SSA places a store inside the
-// left-hand side it writes, such as at f in h.f = b, so the stored value is the right-hand side
-// of that assignment; a field of a composite literal is placed at its colon; and a select is
-// placed at its keyword, with its cases in source order.
-func storedOperand(instr ssa.Instruction, v ssa.Value, path []ast.Node, pos token.Pos) ast.Expr {
-	switch x := instr.(type) {
-	case *ssa.Store:
-		if x.Val != v {
-			return nil
-		}
-	case *ssa.MapUpdate:
-		if x.Value != v {
-			return nil
-		}
-	case *ssa.Select:
-	default:
-		return nil
-	}
-
-	for _, n := range path {
-		switch e := n.(type) {
-		case *ast.SelectStmt:
-			if sel, ok := instr.(*ssa.Select); ok && e.Select == pos {
-				return sentOperand(sel, v, e)
-			}
-		case *ast.KeyValueExpr:
-			if e.Colon == pos {
-				return e.Value
-			}
-		case *ast.AssignStmt:
-			for i, lhs := range e.Lhs {
-				if len(e.Lhs) == len(e.Rhs) && lhs.Pos() <= pos && pos < lhs.End() {
-					return e.Rhs[i]
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// sentOperand returns the value a case of the select statement stmt sends, when it sends v.
-// The select's states are its cases in source order, the default left out.
-func sentOperand(sel *ssa.Select, v ssa.Value, stmt *ast.SelectStmt) ast.Expr {
-	var cases []*ast.CommClause
-
-	for _, s := range stmt.Body.List {
-		if clause := s.(*ast.CommClause); clause.Comm != nil {
-			cases = append(cases, clause)
-		}
-	}
-
-	for i, state := range sel.States {
-		if send, ok := cases[i].Comm.(*ast.SendStmt); ok && state.Send == v {
-			return send.Value
-		}
-	}
-
-	return nil
-}
-
-// isMapKey reports whether v is the key, rather than the map, of a map lookup. Slice and array
-// indexes are integers, which are never tracked.
-func isMapKey(instr ssa.Instruction, v ssa.Value) bool {
-	lookup, ok := instr.(*ssa.Lookup)
-	return ok && lookup.Index == v && lookup.X != v
-}
 
 // valueName names the value an argument expression passes: buf for buf, buf[:0], or (buf).
 func valueName(arg ast.Expr) string {

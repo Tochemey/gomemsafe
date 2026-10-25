@@ -144,6 +144,7 @@ Dependencies are the standard library plus `golang.org/x/tools`
 | `internal/invalidation` | The analysis behind MS301, MS302, and the summaries: tracks values a call took back, and views a call on their owner ended, through one SSA function, by alias class. |
 | `internal/catalog` | The stable check IDs. |
 | `internal/report` | The one way checks emit diagnostics, honouring `//memsafe:allow`. |
+| `internal/locate` | Maps an SSA instruction back to the source expression of the value it uses, so that diagnostics point at that value. |
 | `internal/vetmode` | Detects vet-tool invocations and facts-only (`VetxOnly`) runs. |
 | `internal/trace` | `GOMEMSAFE_TRACE` timing events, used by `-stats` and the benchmarks. |
 | `internal/cmd/bench`, `internal/cmd/rsswrap` | Development commands: the benchmark harness for §7.1, and the `-toolexec` wrapper that measures compile memory. |

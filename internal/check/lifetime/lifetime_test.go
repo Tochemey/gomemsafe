@@ -24,7 +24,6 @@ package lifetime
 
 import (
 	"go/ast"
-	"go/constant"
 	"go/token"
 	"go/types"
 	"os"
@@ -38,6 +37,7 @@ import (
 
 	"github.com/tochemey/gomemsafe/internal/invalidation"
 	"github.com/tochemey/gomemsafe/internal/lazyssa"
+	"github.com/tochemey/gomemsafe/internal/locate"
 	"github.com/tochemey/gomemsafe/internal/vetmode"
 )
 
@@ -95,20 +95,13 @@ func TestBuildsNoSSAWithoutTriggers(t *testing.T) {
 	}
 }
 
-// TestFallsBackForCallsWithoutSource covers a call SSA gives no source call for: no operand or
-// argument is found, and the callee is named from its object.
+// TestFallsBackForCallsWithoutSource covers a call SSA gives no source call for: no argument is
+// found, and the callee is named from its object.
 func TestFallsBackForCallsWithoutSource(t *testing.T) {
 	sig := types.NewSignatureType(nil, nil, nil, nil, nil, false)
 	site := invalidation.Site{Call: &ssa.Call{}, Callee: types.NewFunc(token.NoPos, nil, "release", sig)}
-	c := &checker{pass: &analysis.Pass{}, calls: make(map[token.Pos]*ast.CallExpr)}
-
-	if expr := c.callOperand(site.Call, nil); expr != nil {
-		t.Errorf("callOperand = %v, want nil", expr)
-	}
-
-	if expr := c.operandAt(site.Call, nil, site.Call.Pos()); expr != nil {
-		t.Errorf("operandAt = %v, want nil", expr)
-	}
+	calls := make(map[token.Pos]*ast.CallExpr)
+	c := &checker{pass: &analysis.Pass{}, calls: calls, loc: locate.New(&analysis.Pass{}, calls)}
 
 	if arg := c.siteArg(site, 0); arg != nil {
 		t.Errorf("siteArg = %v, want nil", arg)
@@ -128,15 +121,11 @@ func TestFallsBackForCallsWithoutSource(t *testing.T) {
 func TestFindsNoSourceForArgumentsSSAAdds(t *testing.T) {
 	call := &ast.CallExpr{Fun: ast.NewIdent("release")}
 	site := invalidation.Site{Call: &ssa.Call{}}
-	c := &checker{calls: map[token.Pos]*ast.CallExpr{site.Call.Pos(): call}}
+	calls := map[token.Pos]*ast.CallExpr{site.Call.Pos(): call}
+	c := &checker{calls: calls, loc: locate.New(&analysis.Pass{}, calls)}
 
 	if arg := c.siteArg(site, 1); arg != nil {
 		t.Errorf("siteArg = %v, want nil", arg)
-	}
-
-	v := ssa.NewConst(constant.MakeInt64(1), types.Typ[types.Int])
-	if expr := argExpr(call, []ssa.Value{v}, v, 0); expr != nil {
-		t.Errorf("argExpr = %v, want nil", expr)
 	}
 }
 

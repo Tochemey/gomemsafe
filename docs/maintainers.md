@@ -24,6 +24,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
                       └─ checks       lifetime (MS301, MS302), skipped in facts-only runs;
                                       unsafeflow (MS101, MS103; MS104 with -unsafeflow.safety), not run in facts-only runs
                            └─ lifetime: invalidation + flow, must-dataflow on SSA
+                           └─ locate: points diagnostics at the value used
                            └─ report: emits diagnostics, honouring //memsafe:allow
   └─ frontend decodes the JSON, renders it, exits 0 / 1 / 2
 ```
@@ -35,7 +36,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `analyzers` | Public API: `All()`, `Default()` | checks, directive |
 | `cmd/gomemsafe` | The binary; picks front-end or vet-tool mode | analyzers, frontend, trace, vetmode |
 | `internal/catalog` | The stable check IDs (`MS301`, …), implemented and planned | none |
-| `internal/check/lifetime` | MS301, use after invalidation; MS302, a view used after its owner ended it | engine packages, report |
+| `internal/check/lifetime` | MS301, use after invalidation; MS302, a view used after its owner ended it | engine packages, locate, report |
 | `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it; MS103, a reflect header value used as memory; MS104 (opt-in), an unsafe operation without a `// SAFETY:` comment | catalog, directive, report |
 | `internal/cmd/bench` | Development command: the benchmark harness (design §7.1) | frontend, trace |
 | `internal/cmd/rsswrap` | Development command: `-toolexec` wrapper recording each compile's peak RSS | trace |
@@ -45,6 +46,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `internal/effect` | Known effects of library calls: invalidations (`sync.Pool.Put`), and the standard library's views and the events that end them | none |
 | `internal/invalidation` | Tracks invalidated values, and views that were ended, through one function; the view a function returns and the events it is on its parameters, for summaries | effect, flow |
 | `internal/lazyssa` | Builds SSA on demand, once | trace |
+| `internal/locate` | Maps SSA instructions back to the source expressions of the values they use | none |
 | `internal/prefilter` | Static callees per function, and those passed a parameter; calls by position | none |
 | `internal/report` | The one way checks emit diagnostics | directive |
 | `internal/summary` | Facts of what each function does to its arguments (taken back, viewed, views ended), the only fact producer | directive, effect, flow, invalidation, lazyssa, prefilter |
