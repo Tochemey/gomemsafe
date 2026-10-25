@@ -39,6 +39,15 @@ type Problem interface {
 	Transfer(instr ssa.Instruction, state *Bitset)
 }
 
+// EdgeProblem is a Problem with effects on control-flow edges, such as a select case that
+// sends its value only on the edge into the case's body. Edge updates state, the out-state of
+// pred, as it flows into succ; the engine applies it wherever a block's in-state, or a phi's
+// incoming state, is taken from a predecessor.
+type EdgeProblem interface {
+	Problem
+	Edge(pred, succ *ssa.BasicBlock, state *Bitset)
+}
+
 // Outcome reports whether a solution is usable.
 type Outcome int
 
@@ -67,6 +76,10 @@ type Engine struct {
 	fn      *ssa.Function
 	edgeFor *ssa.BasicBlock
 	edge    func(int) *Bitset
+	// edges is the problem's edge effects, when it has any, and crossed holds a predecessor's
+	// out-state after them.
+	edges   EdgeProblem
+	crossed Bitset
 }
 
 // Solution holds the in-state of every reached block after Solve.
@@ -90,6 +103,8 @@ func (e *Engine) Solve(fn *ssa.Function, p Problem) (Solution, Outcome) {
 	}
 
 	e.state.Reset(n)
+	e.crossed.Reset(n)
+	e.edges, _ = p.(EdgeProblem)
 
 	if e.edge == nil {
 		e.edge = e.edgeState
@@ -188,16 +203,31 @@ func (e *Engine) meet(b *ssa.BasicBlock) {
 			continue
 		}
 
+		out := e.cross(p, b)
+
 		if first {
-			in.CopyFrom(&e.out[p.Index])
+			in.CopyFrom(out)
 
 			first = false
 
 			continue
 		}
 
-		in.IntersectWith(&e.out[p.Index])
+		in.IntersectWith(out)
 	}
+}
+
+// cross returns the out-state of pred as it flows into succ: the out-state itself, or, for a
+// problem with edge effects, a copy with them applied, valid until the next call.
+func (e *Engine) cross(pred, succ *ssa.BasicBlock) *Bitset {
+	if e.edges == nil {
+		return &e.out[pred.Index]
+	}
+
+	e.crossed.CopyFrom(&e.out[pred.Index])
+	e.edges.Edge(pred, succ, &e.crossed)
+
+	return &e.crossed
 }
 
 // apply runs b's instructions over e.state, calling visit (if non-nil) before each one.
@@ -217,14 +247,14 @@ func (e *Engine) apply(b *ssa.BasicBlock, p Problem, visit func(ssa.Instruction,
 	}
 }
 
-// edgeState returns the out-state of the i-th predecessor of the block being applied, or nil
-// if that predecessor is unreachable. It is a method value created once, so applying a block
-// allocates nothing.
+// edgeState returns the out-state of the i-th predecessor of the block being applied, as it
+// flows into that block, or nil if that predecessor is unreachable. It is valid until the next
+// call. It is a method value created once, so applying a block allocates nothing.
 func (e *Engine) edgeState(i int) *Bitset {
 	pred := e.edgeFor.Preds[i]
 	if !e.reached[pred.Index] {
 		return nil
 	}
 
-	return &e.out[pred.Index]
+	return e.cross(pred, e.edgeFor)
 }

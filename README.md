@@ -19,6 +19,7 @@ collector. It runs as a `go vet` tool, with zero runtime cost and no language ch
 | **MS102** | A string used after a write into the bytes it shares with a `[]byte` through `unsafe.String` or `unsafe.Slice` |
 | **MS103** | A `reflect.SliceHeader` or `reflect.StringHeader` value used as memory |
 | **MS104** | An `unsafe` operation without a `// SAFETY:` comment (opt-in: `-unsafeflow.safety`) |
+| **MS501** | A value used after its ownership moved: an `//memsafe:owned` value sent on a channel or stored into another owner, or a value passed to a `//memsafe:consumes` parameter |
 
 Every check, with its exact rules and its limits, is defined in the
 [check catalogue](docs/design.md#5-check-catalogue). Changes are listed in
@@ -59,7 +60,7 @@ annotation language, with every directive, its scope, and examples, is in
 [docs/design.md §6](docs/design.md#6-annotation-language). The checks each directive enables
 are in the [check catalogue, §5](docs/design.md#5-check-catalogue).
 
-Three directives are enforced today. The first is a suppression:
+Five directives are enforced today. The first is a suppression:
 
 ```go
 //memsafe:allow MS301 the buffer is copied before Put returns
@@ -67,7 +68,7 @@ buf.WriteString(p)
 ```
 
 It suppresses the named checks on its own line and on the next line, and the reason is
-mandatory. The other two declare the views of your own types, for MS302:
+mandatory. Two declare the views of your own types, for MS302:
 
 ```go
 // Bytes returns a view that is valid until the next Reset.
@@ -83,8 +84,27 @@ func (b *Buffer) Reset() { b.b = b.b[:0] }
 
 `viewof` says that the first result is a view into the named parameter, and `invalidates` that
 a call ends every view of it. Callers in any package then get `MS302` for `v := buf.Bytes();
-buf.Reset(); use(v)`. The other directives are recognised, but reported as
-`MS000: not supported yet`, so a contract that nothing checks never looks checked.
+buf.Reset(); use(v)`.
+
+The last two declare ownership, for MS501:
+
+```go
+// Frame is held by one owner at a time.
+//
+//memsafe:owned
+type Frame struct{ data []byte }
+
+// Release takes ownership of f.
+//
+//memsafe:consumes f
+func Release(f *Frame) { pool.Put(f) }
+```
+
+`owned` gives a type move semantics: sending a `Frame` on a channel, or storing it into another
+owned value, moves it. `consumes` says that a call takes ownership of the named argument.
+Either way, the caller gets `MS501` for using the value again: `out <- f; f.data[0] = 1`. The
+other directives are recognised, but reported as `MS000: not supported yet`, so a contract that
+nothing checks never looks checked.
 
 With `-unsafeflow.safety`, every `unsafe` operation needs a `// SAFETY:` comment on the line
 above its statement, saying why it is safe:

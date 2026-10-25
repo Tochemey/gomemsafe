@@ -43,6 +43,14 @@ type callProblem struct {
 	calls map[ssa.Instruction]namedCall
 }
 
+// edgeProblem is a callProblem that also sets fact 0 on the edge out of the entry block into
+// its first successor, and records what each phi sees on its edges.
+type edgeProblem struct {
+	*callProblem
+	join *ssa.BasicBlock
+	seen []bool
+}
+
 // namedCall is a call to set, kill, or check with its constant argument.
 type namedCall struct {
 	name string
@@ -200,6 +208,92 @@ func f(c bool) {
 	}
 }
 
+func TestEdgeEffectsHoldOnTheirEdgeOnly(t *testing.T) {
+	fn := buildFunc(t, `
+func f(c bool) {
+	if c {
+		check(0) // line 5: on the edge's path
+	} else {
+		check(0) // line 7: not on it
+	}
+	check(0) // line 9: on one incoming path only
+}`)
+
+	var eng Engine
+
+	p := &edgeProblem{callProblem: newCallProblem(fn, 1)}
+
+	sol, outcome := eng.Solve(fn, p)
+	if outcome != Solved {
+		t.Fatalf("outcome = %v, want Solved", outcome)
+	}
+
+	got := make(map[int]bool)
+
+	sol.Walk(func(instr ssa.Instruction, state *Bitset) {
+		if c, ok := p.calls[instr]; ok {
+			got[p.fset.Position(instr.Pos()).Line] = state.Has(c.arg)
+		}
+	})
+
+	if !got[5] || got[7] || got[9] {
+		t.Fatalf("checks = %v, want only line 5 true", got)
+	}
+}
+
+func TestPhisSeeTheEdgeEffects(t *testing.T) {
+	fn := buildFunc(t, `
+func f(c bool) int {
+	x := 1
+	if !c {
+		x = 2
+	}
+	return x
+}`)
+
+	var eng Engine
+
+	p := &edgeProblem{callProblem: newCallProblem(fn, 1)}
+	if _, outcome := eng.Solve(fn, p); outcome != Solved {
+		t.Fatalf("outcome = %v, want Solved", outcome)
+	}
+
+	// The edge effect sets the fact on the way into the entry block's first successor, so the
+	// phi sees it on the edge out of that successor, or on the entry's own edge when the phi's
+	// block is that successor.
+	entry := fn.Blocks[0]
+
+	if p.join == nil || len(p.seen) != len(p.join.Preds) {
+		t.Fatalf("phi saw %v, want one state per edge", p.seen)
+	}
+
+	for i, pred := range p.join.Preds {
+		if want := pred == entry.Succs[0] || pred == entry && p.join == entry.Succs[0]; p.seen[i] != want {
+			t.Errorf("edge from block %d: fact %v, want %v", pred.Index, p.seen[i], want)
+		}
+	}
+}
+
+func TestSolveWithEdgeEffectsAllocatesNothingWhenReused(t *testing.T) {
+	fn := buildFunc(t, `
+func f(c bool) {
+	if c {
+		check(0)
+	}
+	check(0)
+}`)
+
+	var eng Engine
+
+	p := &edgeProblem{callProblem: newCallProblem(fn, 1)}
+	eng.Solve(fn, p) // size the buffers
+
+	allocs := testing.AllocsPerRun(100, func() { eng.Solve(fn, p) })
+	if allocs != 0 {
+		t.Fatalf("Solve allocated %v times per run, want 0", allocs)
+	}
+}
+
 func TestWalkWithoutSolutionDoesNothing(t *testing.T) {
 	var s Solution
 
@@ -284,6 +378,22 @@ func (p *callProblem) Transfer(instr ssa.Instruction, state *Bitset) {
 		state.Set(c.arg)
 	case "kill":
 		state.Clear(c.arg)
+	}
+}
+
+func (p *edgeProblem) Edge(pred, succ *ssa.BasicBlock, state *Bitset) {
+	if pred.Index == 0 && succ == pred.Succs[0] {
+		state.Set(0)
+	}
+}
+
+func (p *edgeProblem) Phi(phi *ssa.Phi, edge func(int) *Bitset, _ *Bitset) {
+	p.join = phi.Block()
+	p.seen = p.seen[:0]
+
+	for i := range phi.Edges {
+		in := edge(i)
+		p.seen = append(p.seen, in != nil && in.Has(0))
 	}
 }
 

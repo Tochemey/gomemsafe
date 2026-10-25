@@ -23,12 +23,14 @@
 // Package summary computes, for every function, what it does to its arguments on every path to
 // a normal return, and exports that as a Fact: the parameters it takes back (MS301), the
 // parameter its first result is a view into, and the events it is on each parameter's buffer
-// (MS302). Callers in other packages read the fact instead of the callee's body, the way Rust's
-// borrow checker trusts signatures.
+// (MS302), and the parameters whose ownership it takes (MS501). Callers in other packages read
+// the fact instead of the callee's body, the way Rust's borrow checker trusts signatures.
 //
-// A function's view contract, declared with //memsafe:viewof and //memsafe:invalidates, is part
-// of its fact as declared, whatever its body does; what the summary derives from the body is
-// added to it. Known effects (package effect) take precedence over both.
+// A function's contract, declared with //memsafe:viewof, //memsafe:invalidates, and
+// //memsafe:consumes, is part of its fact as declared, whatever its body does; what the summary
+// derives from the body is added to it. Ownership is never derived: only a contract declares
+// it. Known effects (package effect) take precedence over both. A type declared with
+// //memsafe:owned gets an OwnedFact, so that its values move in every package.
 //
 // It is the only gomemsafe analyzer that exports facts, so it is the only one that does work
 // on every dependency: checks that require it also run there, but return immediately. Within
@@ -66,7 +68,7 @@ var Analyzer = &analysis.Analyzer{
 	Doc:        "computes per-function effect summaries and exports them as facts",
 	Requires:   []*analysis.Analyzer{directive.Analyzer, prefilter.Analyzer, lazyssa.Analyzer},
 	Run:        run,
-	FactTypes:  []analysis.Fact{new(Fact)},
+	FactTypes:  []analysis.Fact{new(Fact), new(OwnedFact)},
 	ResultType: reflect.TypeFor[*Result](),
 }
 
@@ -81,6 +83,14 @@ type Fact struct {
 	// Events lists, by argument, the events a call is on that argument's buffer. Trailing
 	// arguments with none are left out.
 	Events []effect.Event
+	// Consumes lists the arguments whose ownership the function takes.
+	Consumes effect.ArgSet
+}
+
+// OwnedFact marks a type whose values have move semantics: //memsafe:owned in its doc comment.
+// Only owned types get one, so Owned is always set; gob encodes no struct without a field.
+type OwnedFact struct {
+	Owned bool
 }
 
 // Result is what checks need from the summaries of one package. It implements
@@ -90,17 +100,24 @@ type Result struct {
 	// invalidating function directly or inside a function literal.
 	Triggered []*prefilter.Func
 
-	pass     *analysis.Pass
-	local    map[*types.Func]Fact
-	imported map[*types.Func]Fact
+	pass          *analysis.Pass
+	dir           *directive.Result
+	local         map[*types.Func]Fact
+	imported      map[*types.Func]Fact
+	ownedImported map[*types.TypeName]bool
 }
 
 // AFact implements analysis.Fact.
 func (*Fact) AFact() {}
 
+// AFact implements analysis.Fact.
+func (*OwnedFact) AFact() {}
+
+func (*OwnedFact) String() string { return "owned" }
+
 // String lists the parts of the summary that are set: invalidates(0x1) for the argument set,
-// viewof(0: 0x7) for a view into argument 0 that events 0x7 end, and ends(0: 0x4) for the events
-// on argument 0.
+// viewof(0: 0x7) for a view into argument 0 that events 0x7 end, ends(0: 0x4) for the events
+// on argument 0, and consumes(0x2) for the arguments whose ownership the function takes.
 func (f *Fact) String() string {
 	var parts []string
 
@@ -122,6 +139,10 @@ func (f *Fact) String() string {
 
 	if len(ends) > 0 {
 		parts = append(parts, "ends("+strings.Join(ends, ", ")+")")
+	}
+
+	if f.Consumes != 0 {
+		parts = append(parts, fmt.Sprintf("consumes(%#x)", uint64(f.Consumes)))
 	}
 
 	return strings.Join(parts, " ")
@@ -171,6 +192,64 @@ func (r *Result) EndsViews(fn *types.Func) bool {
 	}
 
 	return len(r.factOf(fn).Events) > 0
+}
+
+// Consumes returns the call arguments whose ownership a call of fn takes.
+func (r *Result) Consumes(fn *types.Func) effect.ArgSet { return r.factOf(fn).Consumes }
+
+// Owned reports whether t is a type whose values move, or a pointer to one: a named type, or an
+// instance of a generic one, declared with //memsafe:owned in any package.
+func (r *Result) Owned(t types.Type) bool {
+	t = types.Unalias(t)
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(ptr.Elem())
+	}
+
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+
+	tn := named.Obj()
+	if tn.Pkg() == r.pass.Pkg {
+		return r.dir.IsOwned(tn)
+	}
+
+	owned, seen := r.ownedImported[tn]
+	if !seen && tn.Pkg() != nil {
+		owned = r.pass.ImportObjectFact(tn, new(OwnedFact))
+		r.ownedImported[tn] = owned
+	}
+
+	return owned
+}
+
+// Annotated reports whether the package, or any package it depends on, declares an owned type
+// or a consuming parameter, so that ownership can move at all. It reads every imported fact, so
+// only checks that run on the packages being analysed call it, never on dependencies.
+func (r *Result) Annotated() bool {
+	if len(r.dir.Owned) > 0 {
+		return true
+	}
+
+	for _, c := range r.dir.Contracts {
+		if c.Consumes != 0 {
+			return true
+		}
+	}
+
+	for _, f := range r.pass.AllObjectFacts() {
+		switch fact := f.Fact.(type) {
+		case *OwnedFact:
+			return true
+		case *Fact:
+			if fact.Consumes != 0 {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // Describe words what fn does to the arguments it invalidates, for diagnostics. It is empty for
@@ -231,7 +310,10 @@ func run(pass *analysis.Pass) (any, error) {
 	ssaRes := pass.ResultOf[lazyssa.Analyzer].(*lazyssa.Result)
 	dir := pass.ResultOf[directive.Analyzer].(*directive.Result)
 
-	res := &Result{pass: pass, local: make(map[*types.Func]Fact), imported: make(map[*types.Func]Fact)}
+	res := &Result{
+		pass: pass, dir: dir, local: make(map[*types.Func]Fact), imported: make(map[*types.Func]Fact),
+		ownedImported: make(map[*types.TypeName]bool),
+	}
 
 	for _, c := range dir.Contracts {
 		res.local[c.Func] = withContract(Fact{}, c)
@@ -295,6 +377,10 @@ func run(pass *analysis.Pass) (any, error) {
 		pass.ExportObjectFact(fn, &fact)
 	}
 
+	for _, tn := range dir.Owned {
+		pass.ExportObjectFact(tn, &OwnedFact{Owned: true})
+	}
+
 	for _, f := range pre.Funcs {
 		if invalidates, _, _ := res.candidate(f); invalidates {
 			res.Triggered = append(res.Triggered, f)
@@ -353,12 +439,15 @@ func invalidatedAtReturn(fn *ssa.Function, lookup invalidation.Lookup, eng *flow
 	return bits
 }
 
-// withContract returns fact with the view contract c added: the declared view replaces a
-// derived one, and every argument c says a call invalidates is all events.
+// withContract returns fact with the contract c added: the declared view replaces a derived
+// one, every argument c says a call invalidates is all events, and the arguments c says a call
+// consumes are consumed.
 func withContract(fact Fact, c *directive.Contract) Fact {
 	if c.View.EndedBy != 0 {
 		fact.View = c.View
 	}
+
+	fact.Consumes |= c.Consumes
 
 	if c.Ends == 0 {
 		return fact
@@ -398,7 +487,8 @@ func trimEvents(events []effect.Event) []effect.Event {
 }
 
 func equal(a, b Fact) bool {
-	return a.Invalidates == b.Invalidates && a.View == b.View && slices.Equal(a.Events, b.Events)
+	return a.Invalidates == b.Invalidates && a.View == b.View && slices.Equal(a.Events, b.Events) &&
+		a.Consumes == b.Consumes
 }
 
 // knownViewEffect reports whether package effect knows fn's views and events, which then take
