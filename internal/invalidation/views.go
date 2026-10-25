@@ -35,19 +35,21 @@ import (
 // lengthBuiltins read only a slice's header, never the memory a view points into.
 var lengthBuiltins = map[string]bool{"len": true, "cap": true}
 
-// View is a call whose first result is a view into its receiver's buffer, such as
-// bytes.Buffer.Bytes (package effect). The view is invalid after a later call on the same
-// receiver whose events end it, such as bytes.Buffer.Reset.
+// View is a call whose first result is a view into the buffer of one of its arguments, such as
+// bytes.Buffer.Bytes into its receiver (package effect), or a helper whose summary or directive
+// says so. The view is invalid after a later call whose events on the same buffer end it, such
+// as bytes.Buffer.Reset.
 //
-// The receiver must be the same buffer at both calls: a local variable, a parameter, a global,
-// or a field such a value holds (ownerOf). A receiver loaded from memory at each call, such as
-// a buffer behind a pointer field or a variable that a function literal captures, is not
-// followed: it could be reassigned between the calls. Nor is an owner the function replaces
-// after a view of it was made (dropReplacedOwners). Such a bug is missed, never invented.
+// The buffer must be the same at both calls: a local variable, a parameter, a global, or a
+// field such a value holds (ownerOf). A buffer loaded from memory at each call, such as one
+// behind a pointer field or a variable that a function literal captures, is not followed: it
+// could be reassigned between the calls. Nor is an owner the function replaces after a view of
+// it was made (dropReplacedOwners). Such a bug is missed, never invented.
 type View struct {
 	Call   *ssa.Call
 	Callee *types.Func
-	// Owner is the receiver the view points into.
+	// Arg is the call argument the view points into, and Owner the buffer that stands for it.
+	Arg   int
 	Owner ssa.Value
 }
 
@@ -67,7 +69,7 @@ type viewClass struct {
 }
 
 // addViews gives the result of each view call among calls its own class.
-func (a *Analysis) addViews(calls []*ssa.Call) {
+func (a *Analysis) addViews(calls []*ssa.Call, lookup Lookup) {
 	a.viewClasses = make(map[int]viewClass)
 
 	for _, call := range calls {
@@ -76,8 +78,10 @@ func (a *Analysis) addViews(calls []*ssa.Call) {
 			continue
 		}
 
-		endedBy, isView := effect.ViewOf(callee)
-		if !isView {
+		view, isView := lookup.ViewOf(callee)
+		args := call.Common().Args
+
+		if !isView || view.Arg >= len(args) || isConst(args[view.Arg]) {
 			continue
 		}
 
@@ -86,22 +90,21 @@ func (a *Analysis) addViews(calls []*ssa.Call) {
 			continue
 		}
 
-		owner := a.ownerOf(call.Common().Args[0])
-		a.viewClasses[a.class(result)] = viewClass{view: len(a.views), owner: owner, endedBy: endedBy}
-		a.views = append(a.views, View{Call: call, Callee: callee, Owner: owner})
+		owner := a.ownerOf(args[view.Arg])
+		a.viewClasses[a.class(result)] = viewClass{view: len(a.views), owner: owner, endedBy: view.EndedBy}
+		a.views = append(a.views, View{Call: call, Callee: callee, Arg: view.Arg, Owner: owner})
 	}
 }
 
 // endViews makes views of phis whose values are all views of one owner or nil, then records
-// as sites the calls among calls whose events end some views. It runs after closeOverAliases,
-// which gives the phis their classes.
-func (a *Analysis) endViews(calls []*ssa.Call) {
+// as sites the calls among calls whose events end some views: one site for each argument whose
+// views a call ends. It runs after closeOverAliases, which gives the phis their classes.
+func (a *Analysis) endViews(calls []*ssa.Call, lookup Lookup) {
 	if len(a.views) == 0 {
 		return
 	}
 
-	a.dropReplacedOwners()
-	a.addPhiViews()
+	a.resolveViews()
 
 	for _, call := range calls {
 		callee, ok := staticCallee(call)
@@ -109,27 +112,42 @@ func (a *Analysis) endViews(calls []*ssa.Call) {
 			continue
 		}
 
-		events := effect.EventsOf(callee)
-		if events == 0 {
-			continue
-		}
+		for i, arg := range call.Common().Args {
+			events := lookup.EventsOn(callee, i)
+			if events == 0 || isConst(arg) {
+				continue
+			}
 
-		owner := a.ownerOf(call.Common().Args[0])
+			owner := a.ownerOf(arg)
 
-		var classes []int
+			var classes []int
 
-		for c, vc := range a.viewClasses {
-			if vc.owner == owner && vc.endedBy&events != 0 {
-				classes = append(classes, c)
+			for c, vc := range a.viewClasses {
+				if vc.owner == owner && vc.endedBy&events != 0 {
+					classes = append(classes, c)
+				}
+			}
+
+			if len(classes) > 0 {
+				// Every class is a view of argument i.
+				slices.Sort(classes)
+
+				args := make([]int, len(classes))
+				for j := range args {
+					args[j] = i
+				}
+
+				a.addSiteClasses(Site{Call: call, Callee: callee, Args: []int{i}}, classes, args, true)
 			}
 		}
-
-		if len(classes) > 0 {
-			// Every class is a view of the receiver, argument 0.
-			slices.Sort(classes)
-			a.addSiteClasses(Site{Call: call, Callee: callee, Args: []int{0}}, classes, make([]int, len(classes)), true)
-		}
 	}
+}
+
+// resolveViews stops following the views of replaced owners, then makes views of the phis that
+// merge views. It runs after closeOverAliases, which gives the phis their classes.
+func (a *Analysis) resolveViews() {
+	a.dropReplacedOwners()
+	a.addPhiViews()
 }
 
 // addPhiViews makes a view of each phi class whose values are all views, nil, or such phis,
@@ -360,6 +378,11 @@ func viewResult(call *ssa.Call) (ssa.Value, bool) {
 	}
 
 	return nil, false
+}
+
+func isConst(v ssa.Value) bool {
+	_, ok := v.(*ssa.Const)
+	return ok
 }
 
 // readsOnlyLength reports whether instr is len or cap, which read a view's header and not the

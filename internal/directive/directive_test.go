@@ -26,6 +26,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"strings"
 	"testing"
 
@@ -34,6 +35,7 @@ import (
 
 	"github.com/tochemey/gomemsafe/internal/catalog"
 	"github.com/tochemey/gomemsafe/internal/directive"
+	"github.com/tochemey/gomemsafe/internal/effect"
 	"github.com/tochemey/gomemsafe/internal/vetmode"
 )
 
@@ -81,6 +83,47 @@ func TestReportsNothingInFactsOnlyRuns(t *testing.T) {
 	}
 }
 
+// TestContractsGiveArgumentIndexes checks the contracts of the well-formed viewof and
+// invalidates directives in the fixture: argument indexes count the receiver as 0, a declared
+// view is ended by every event, and a malformed directive adds nothing.
+func TestContractsGiveArgumentIndexes(t *testing.T) {
+	r := analysistest.Run(t, analysistest.TestData(), directive.Analyzer, "d")[0]
+	res := r.Result.(*directive.Result)
+
+	view := func(arg int) effect.View { return effect.View{Arg: arg, EndedBy: effect.All} }
+	want := []struct {
+		name string
+		view effect.View
+		ends effect.ArgSet
+	}{
+		{"Bytes", view(0), 0},
+		{"Reset", effect.View{}, 1 << 0},
+		{"Swap", view(2), 1<<2 | 1<<3},
+		{"Unnamed", view(1), 0},
+		{"Twice", view(0), 0},
+	}
+
+	if len(res.Contracts) != len(want) {
+		t.Fatalf("%d contracts, want %d", len(res.Contracts), len(want))
+	}
+
+	for i, w := range want {
+		c := res.Contracts[i]
+		if c.Func.Name() != w.name || c.View != w.view || c.Ends != w.ends {
+			t.Errorf("contract %d = %s %+v %#x, want %s %+v %#x",
+				i, c.Func.Name(), c.View, uint64(c.Ends), w.name, w.view, uint64(w.ends))
+		}
+
+		if got, ok := res.ContractOf(c.Func); !ok || got != c {
+			t.Errorf("ContractOf(%s) = %v, %v; want its contract", w.name, got, ok)
+		}
+	}
+
+	if _, ok := res.ContractOf(r.Pass.Pkg.Scope().Lookup("Malformed").(*types.Func)); ok {
+		t.Error("Malformed has a contract; its directives are all malformed")
+	}
+}
+
 func TestSuppressedMatchesNamedIDsOnThatLine(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), suppressed, "s")
 }
@@ -92,7 +135,7 @@ func FuzzDirective(f *testing.F) {
 	for _, seed := range []string{
 		"allow MS301 the buffer is copied first", "allow MS301,MS302 two checks", "allow",
 		"allow MS301", "allow MS999 unknown", "allow ,, empty IDs", "allow MS301\ttab",
-		"allow  MS301 two spaces", "owned", "strict", "unknownverb", "",
+		"allow  MS301 two spaces", "owned", "strict", "unknownverb", "", "viewof x", "invalidates x",
 	} {
 		f.Add(seed)
 	}

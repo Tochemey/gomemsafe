@@ -5,6 +5,8 @@
 - MS301 reports a value used after it was returned to a `sync.Pool`.
 - MS301 follows invalidations through helper functions in other packages, using per-function summaries.
 - MS302 reports a view from `bytes.Buffer`, `bufio.Scanner`, `bufio.Reader`, or `bufio.Writer` used after a call on its buffer ended it.
+- `//memsafe:viewof` and `//memsafe:invalidates` declare the views of other types and the calls that end them, which MS302 follows in callers in any package.
+- MS302 follows views through helper functions in other packages, using per-function summaries: a helper that returns a view of a parameter, or ends a parameter's views.
 - MS101 reports a `uintptr` turned back into a pointer in a way `go vet` cannot see.
 - MS103 reports a `reflect.SliceHeader` or `reflect.StringHeader` value used as memory.
 - MS104 reports an `unsafe` operation without a `// SAFETY:` comment, enabled with `-unsafeflow.safety`.

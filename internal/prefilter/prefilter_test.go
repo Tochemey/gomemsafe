@@ -61,8 +61,32 @@ var reporter = &analysis.Analyzer{
 	},
 }
 
+// paramReporter reports, at each function declaration, the callees the prefilter recorded as
+// passed one of its parameters.
+var paramReporter = &analysis.Analyzer{
+	Name:     "prefilterparams",
+	Doc:      "reports the prefilter's callees with parameters for tests",
+	Requires: []*analysis.Analyzer{prefilter.Analyzer},
+	Run: func(pass *analysis.Pass) (any, error) {
+		for _, f := range pass.ResultOf[prefilter.Analyzer].(*prefilter.Result).Funcs {
+			names := make([]string, 0, len(f.ParamCallees))
+			for _, c := range f.ParamCallees {
+				names = append(names, calleeName(c))
+			}
+
+			pass.Reportf(f.Decl.Pos(), "with parameters: %s", strings.Join(names, ", "))
+		}
+
+		return nil, nil
+	},
+}
+
 func TestRecordsStaticCalleesPerFunction(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), reporter, "p")
+}
+
+func TestRecordsCalleesPassedAParameter(t *testing.T) {
+	analysistest.Run(t, analysistest.TestData(), paramReporter, "params")
 }
 
 func calleeName(fn *types.Func) string {

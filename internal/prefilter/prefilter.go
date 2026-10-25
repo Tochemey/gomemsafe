@@ -21,12 +21,14 @@
 // SOFTWARE.
 
 // Package prefilter makes one cheap pass over a package's syntax and records which static
-// callees each function declaration calls, including calls inside its function literals. It
-// also indexes every call by the position of its opening parenthesis, which is the position
-// SSA gives call instructions, so checks can map an SSA call back to its source.
+// callees each function declaration calls, including calls inside its function literals, and
+// which of them it passes one of its own parameters. It also indexes every call by the position
+// of its opening parenthesis, which is the position SSA gives call instructions, so checks can
+// map an SSA call back to its source.
 //
 // The summary analyzer uses the callees to decide which functions are worth lowering to SSA
-// at all: most functions call nothing that invalidates, and they are never analysed further.
+// at all: most functions call nothing that invalidates, makes a view of a parameter, or ends
+// one, and they are never analysed further.
 package prefilter
 
 import (
@@ -65,6 +67,11 @@ type Func struct {
 	Obj     *types.Func
 	Decl    *ast.FuncDecl
 	Callees []*types.Func
+	// ParamCallees lists the callees that a call passes one of the declaration's parameters, the
+	// receiver included: as an argument, or as the receiver of a method declared on the
+	// parameter's own type. Only a parameter written as itself counts, not a field of it, and
+	// not one that a method promoted from an embedded field or an implicit address takes.
+	ParamCallees []*types.Func
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -74,6 +81,8 @@ func run(pass *analysis.Pass) (any, error) {
 	var current *Func
 
 	seen := make(map[*types.Func]bool)
+	seenWithParam := make(map[*types.Func]bool)
+	params := make(map[types.Object]bool)
 
 	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil), (*ast.CallExpr)(nil)}, func(n ast.Node) {
 		switch n := n.(type) {
@@ -89,18 +98,76 @@ func run(pass *analysis.Pass) (any, error) {
 			res.Funcs = append(res.Funcs, current)
 
 			clear(seen)
+			clear(seenWithParam)
+			clear(params)
+			collectParams(pass, n, params)
 		case *ast.CallExpr:
 			res.Calls[n.Lparen] = n
 			if current == nil || n.Pos() < current.Decl.Pos() || n.End() > current.Decl.End() {
 				return
 			}
 
-			if callee := typeutil.StaticCallee(pass.TypesInfo, n); callee != nil && !seen[callee] {
+			callee := typeutil.StaticCallee(pass.TypesInfo, n)
+			if callee == nil {
+				return
+			}
+
+			if !seen[callee] {
 				seen[callee] = true
 				current.Callees = append(current.Callees, callee)
+			}
+
+			if !seenWithParam[callee] && passesParam(pass, n, params) {
+				seenWithParam[callee] = true
+				current.ParamCallees = append(current.ParamCallees, callee)
 			}
 		}
 	})
 
 	return res, nil
+}
+
+// collectParams adds the receiver and parameters of decl to params.
+func collectParams(pass *analysis.Pass, decl *ast.FuncDecl, params map[types.Object]bool) {
+	var fields []*ast.Field
+	if decl.Recv != nil {
+		fields = append(fields, decl.Recv.List...)
+	}
+
+	for _, field := range append(fields, decl.Type.Params.List...) {
+		for _, id := range field.Names {
+			if obj := pass.TypesInfo.Defs[id]; obj != nil {
+				params[obj] = true
+			}
+		}
+	}
+}
+
+// passesParam reports whether call passes one of params as an argument, or as the receiver of
+// a method declared on the parameter's own type.
+func passesParam(pass *analysis.Pass, call *ast.CallExpr, params map[types.Object]bool) bool {
+	isParam := func(e ast.Expr) bool {
+		id, ok := ast.Unparen(e).(*ast.Ident)
+		return ok && params[pass.TypesInfo.Uses[id]]
+	}
+
+	for _, arg := range call.Args {
+		if isParam(arg) {
+			return true
+		}
+	}
+
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || !isParam(sel.X) {
+		return false
+	}
+
+	selection, ok := pass.TypesInfo.Selections[sel]
+	if !ok || selection.Kind() != types.MethodVal || len(selection.Index()) != 1 {
+		return false
+	}
+
+	recv := selection.Obj().(*types.Func).Signature().Recv()
+
+	return types.Identical(recv.Type(), pass.TypesInfo.Uses[ast.Unparen(sel.X).(*ast.Ident)].Type())
 }

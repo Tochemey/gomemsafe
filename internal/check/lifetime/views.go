@@ -24,10 +24,10 @@ package lifetime
 
 import (
 	"fmt"
+	"go/types"
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/tochemey/gomemsafe/internal/effect"
 	"github.com/tochemey/gomemsafe/internal/invalidation"
 	"github.com/tochemey/gomemsafe/internal/prefilter"
 	"github.com/tochemey/gomemsafe/internal/report"
@@ -41,12 +41,14 @@ const (
 	msgViewFrom          = "%s is a view into %s from %s"
 	msgViewEndedHere     = "%s ends the views into %s here"
 	helpCopyView         = "copy %s with bytes.Clone before %s, or move %s after the last use of %s"
+	helpCopyOtherView    = "copy %s before %s, or move %s after the last use of %s"
 )
 
 // checkedFuncs returns, in source order, the function declarations worth checking: those the
 // summary analyzer marks as calling an invalidating function, and those that call both a view
-// and a call that can end one. A function with a view but no such call has nothing to report,
-// because views are followed within one function only.
+// and a call that can end one, known effects or summaries alike. A function with a view but no
+// such call has nothing to report, because a view is followed within one function only, and
+// into its callers through the summaries.
 func checkedFuncs(pre *prefilter.Result, sum *summary.Result) []*prefilter.Func {
 	triggered := make(map[*prefilter.Func]bool, len(sum.Triggered))
 	for _, f := range sum.Triggered {
@@ -56,7 +58,7 @@ func checkedFuncs(pre *prefilter.Result, sum *summary.Result) []*prefilter.Func 
 	var out []*prefilter.Func
 
 	for _, f := range pre.Funcs {
-		if triggered[f] || callsViewAndEvent(f) {
+		if triggered[f] || callsViewAndEvent(f, sum) {
 			out = append(out, f)
 		}
 	}
@@ -64,13 +66,13 @@ func checkedFuncs(pre *prefilter.Result, sum *summary.Result) []*prefilter.Func 
 	return out
 }
 
-func callsViewAndEvent(f *prefilter.Func) bool {
+func callsViewAndEvent(f *prefilter.Func, sum *summary.Result) bool {
 	view, event := false, false
 
 	for _, callee := range f.Callees {
-		_, isView := effect.ViewOf(callee)
+		_, isView := sum.ViewOf(callee)
 		view = view || isView
-		event = event || effect.EventsOf(callee) != 0
+		event = event || sum.EndsViews(callee)
 	}
 
 	return view && event
@@ -82,8 +84,13 @@ func (c *checker) reportView(u invalidation.Use) {
 	viewSite := invalidation.Site{Call: u.View.Call, Callee: u.View.Callee}
 
 	name := valueName(c.useOperand(u))
-	owner := exprText(c.siteArg(viewSite, 0))
+	owner := exprText(c.siteArg(viewSite, u.View.Arg))
 	made, ended := c.funText(viewSite), c.funText(u.Site)
+
+	help := helpCopyView
+	if !isByteSlice(u.View.Call.Common().Signature().Results().At(0).Type()) {
+		help = helpCopyOtherView
+	}
 
 	report.Report(c.pass, analysis.Diagnostic{
 		Pos:      c.usePos(u),
@@ -93,6 +100,18 @@ func (c *checker) reportView(u invalidation.Use) {
 			{Pos: u.View.Call.Pos(), Message: fmt.Sprintf(msgViewFrom, name, owner, made)},
 			{Pos: u.Site.Call.Pos(), Message: fmt.Sprintf(msgViewEndedHere, ended, owner)},
 		},
-		SuggestedFixes: []analysis.SuggestedFix{{Message: fmt.Sprintf(helpCopyView, name, ended, ended, name)}},
+		SuggestedFixes: []analysis.SuggestedFix{{Message: fmt.Sprintf(help, name, ended, ended, name)}},
 	})
+}
+
+// isByteSlice reports whether t is a []byte, which bytes.Clone copies.
+func isByteSlice(t types.Type) bool {
+	s, ok := t.Underlying().(*types.Slice)
+	if !ok {
+		return false
+	}
+
+	elem, ok := s.Elem().Underlying().(*types.Basic)
+
+	return ok && elem.Kind() == types.Byte
 }

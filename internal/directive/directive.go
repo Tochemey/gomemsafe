@@ -22,14 +22,24 @@
 
 // Package directive parses //memsafe: comments, once per package, for every check to share.
 //
-// Of the directive language, only allow is enforced today:
+// Three verbs are enforced today. The first is allow:
 //
 //	//memsafe:allow MS301[,MS302] <reason>
 //
 // suppresses the named checks on its own line and on the next line, and requires a reason.
+// The other two declare a function's view contract, in its doc comment:
+//
+//	//memsafe:viewof <param>
+//	//memsafe:invalidates <param>
+//
+// viewof says that the first result is a view into the parameter, valid until a call ends the
+// parameter's views; invalidates says that a call ends every view of the parameter. Result
+// exposes them as a Contract per function, which the summary analyzer turns into facts.
+//
 // Every other verb in the language is recognised but not implemented yet, and is reported as
 // MS000 so that a contract nobody checks never looks checked. Unknown verbs, unknown check
-// IDs, and missing reasons are reported as MS000 too. No directive is ever silently ignored.
+// IDs, missing reasons, and contracts that are misplaced or name no parameter are reported as
+// MS000 too. No directive is ever silently ignored.
 //
 // To implement a verb, remove it from pendingVerbs, parse its arguments in parse, and expose
 // what checks need through Result.
@@ -39,6 +49,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"reflect"
 	"slices"
 	"strings"
@@ -46,6 +57,7 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/tochemey/gomemsafe/internal/catalog"
+	"github.com/tochemey/gomemsafe/internal/effect"
 	"github.com/tochemey/gomemsafe/internal/vetmode"
 )
 
@@ -73,19 +85,42 @@ var Analyzer = &analysis.Analyzer{
 
 // pendingVerbs are valid directives whose checks are not implemented yet.
 var pendingVerbs = map[string]bool{
-	verbStrict: true, verbForbid: true, verbOwned: true, verbConsumes: true,
-	verbBorrows: true, verbViewOf: true, verbInvalidates: true,
+	verbStrict: true, verbForbid: true, verbOwned: true, verbConsumes: true, verbBorrows: true,
 }
 
-// Result answers whether a diagnostic is suppressed.
+// Result answers whether a diagnostic is suppressed, and what view contract a function
+// declares.
 type Result struct {
+	// Contracts lists, in source order, the functions whose doc comments declare a view
+	// contract.
+	Contracts []*Contract
+
 	// allowed maps file name and line to the check IDs allowed there.
-	allowed map[lineKey][]string
+	allowed    map[lineKey][]string
+	contractOf map[*types.Func]*Contract
+}
+
+// Contract is the view contract that //memsafe:viewof and //memsafe:invalidates directives in
+// a function's doc comment declare. Argument indexes count the receiver as 0, matching the
+// argument order of an SSA call.
+type Contract struct {
+	Func *types.Func
+	// View is the view the first result is, for viewof: into the named argument, and ended by
+	// every event on it. It is zero when the function declares none.
+	View effect.View
+	// Ends lists the arguments every view of which a call ends, for invalidates.
+	Ends effect.ArgSet
 }
 
 type lineKey struct {
 	file string
 	line int
+}
+
+// ContractOf returns the view contract that fn's doc comment declares, if it declares one.
+func (r *Result) ContractOf(fn *types.Func) (*Contract, bool) {
+	c, ok := r.contractOf[fn.Origin()]
+	return c, ok
 }
 
 // Suppressed reports whether a //memsafe:allow directive on the same line as pos, or on the
@@ -102,14 +137,22 @@ func (r *Result) Suppressed(fset *token.FileSet, pos token.Pos, id string) bool 
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	res := &Result{allowed: make(map[lineKey][]string)}
+	res := &Result{allowed: make(map[lineKey][]string), contractOf: make(map[*types.Func]*Contract)}
 	report := !vetmode.FactsOnly()
 
 	for _, file := range pass.Files {
+		documented := make(map[*ast.CommentGroup]*ast.FuncDecl)
+
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Doc != nil {
+				documented[fn.Doc] = fn
+			}
+		}
+
 		for _, group := range file.Comments {
 			for _, c := range group.List {
 				if strings.HasPrefix(c.Text, prefix) {
-					parse(pass, res, c, report)
+					parse(pass, res, c, documented[group], report)
 				}
 			}
 		}
@@ -118,7 +161,9 @@ func run(pass *analysis.Pass) (any, error) {
 	return res, nil
 }
 
-func parse(pass *analysis.Pass, res *Result, c *ast.Comment, report bool) {
+// parse records the directive c, which is in the doc comment of decl, or of no function
+// declaration when decl is nil.
+func parse(pass *analysis.Pass, res *Result, c *ast.Comment, decl *ast.FuncDecl, report bool) {
 	malformed := func(format string, args ...any) {
 		if report {
 			pass.Report(analysis.Diagnostic{Pos: c.Pos(), End: c.End(), Category: string(catalog.MalformedDirective),
@@ -154,9 +199,87 @@ func parse(pass *analysis.Pass, res *Result, c *ast.Comment, report bool) {
 		p := pass.Fset.Position(c.Pos())
 		key := lineKey{p.Filename, p.Line}
 		res.allowed[key] = append(res.allowed[key], named...)
+	case verb == verbViewOf || verb == verbInvalidates:
+		if msg := declareContract(pass, res, verb, strings.TrimSpace(rest), decl); msg != "" {
+			malformed("%s", msg)
+		}
 	case pendingVerbs[verb]:
 		malformed("//memsafe:%s is not supported yet by this version of gomemsafe", verb)
 	default:
 		malformed("unknown directive //memsafe:%s", verb)
 	}
+}
+
+// declareContract adds the viewof or invalidates directive of decl, naming param, to decl's
+// contract. It returns what is wrong with the directive, or "" when it is well-formed.
+func declareContract(pass *analysis.Pass, res *Result, verb, param string, decl *ast.FuncDecl) string {
+	if decl == nil {
+		return fmt.Sprintf("//memsafe:%s must be in the doc comment of a function or method declaration", verb)
+	}
+
+	if param == "" || strings.ContainsAny(param, " \t") {
+		return fmt.Sprintf("//memsafe:%s must name one parameter of %s", verb, decl.Name.Name)
+	}
+
+	arg, ok := argIndex(decl, param)
+	if !ok {
+		return fmt.Sprintf("//memsafe:%s names %s, which is not a parameter of %s", verb, param, decl.Name.Name)
+	}
+
+	obj := pass.TypesInfo.Defs[decl.Name].(*types.Func)
+
+	contract, seen := res.contractOf[obj]
+	if !seen {
+		contract = &Contract{Func: obj}
+	}
+
+	if verb == verbInvalidates {
+		contract.Ends |= 1 << uint(arg)
+	} else {
+		switch {
+		case decl.Type.Results.NumFields() == 0:
+			return fmt.Sprintf("//memsafe:viewof needs a result to be the view, and %s returns nothing", decl.Name.Name)
+		case contract.View != effect.View{}:
+			return fmt.Sprintf("//memsafe:viewof declares the view of %s twice", decl.Name.Name)
+		}
+
+		contract.View = effect.View{Arg: arg, EndedBy: effect.All}
+	}
+
+	if !seen {
+		res.contractOf[obj] = contract
+		res.Contracts = append(res.Contracts, contract)
+	}
+
+	return ""
+}
+
+// argIndex returns the call-argument index of the parameter of decl named name, the receiver
+// first. A field without names, such as the int in func(int), is one argument.
+func argIndex(decl *ast.FuncDecl, name string) (int, bool) {
+	var fields []*ast.Field
+	if decl.Recv != nil {
+		fields = append(fields, decl.Recv.List...)
+	}
+
+	fields = append(fields, decl.Type.Params.List...)
+
+	i := 0
+
+	for _, field := range fields {
+		if len(field.Names) == 0 {
+			i++
+			continue
+		}
+
+		for _, id := range field.Names {
+			if id.Name == name && name != "_" {
+				return i, true
+			}
+
+			i++
+		}
+	}
+
+	return 0, false
 }
