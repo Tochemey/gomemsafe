@@ -22,8 +22,9 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
                       ├─ summary      per-function facts → .vetx (all packages): the arguments
                       │               taken back, the view returned, the views ended
                       └─ checks       lifetime (MS301, MS302), skipped in facts-only runs;
-                                      unsafeflow (MS101, MS103; MS104 with -unsafeflow.safety), not run in facts-only runs
+                                      unsafeflow (MS101, MS102, MS103; MS104 with -unsafeflow.safety), not run in facts-only runs
                            └─ lifetime: invalidation + flow, must-dataflow on SSA
+                           └─ unsafeflow: syntax, and for MS102 flow on SSA
                            └─ locate: points diagnostics at the value used
                            └─ report: emits diagnostics, honouring //memsafe:allow
   └─ frontend decodes the JSON, renders it, exits 0 / 1 / 2
@@ -37,7 +38,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `cmd/gomemsafe` | The binary; picks front-end or vet-tool mode | analyzers, frontend, trace, vetmode |
 | `internal/catalog` | The stable check IDs (`MS301`, …), implemented and planned | none |
 | `internal/check/lifetime` | MS301, use after invalidation; MS302, a view used after its owner ended it | engine packages, locate, report |
-| `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it; MS103, a reflect header value used as memory; MS104 (opt-in), an unsafe operation without a `// SAFETY:` comment | catalog, directive, report |
+| `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it; MS102, a string used after a write into the bytes it shares; MS103, a reflect header value used as memory; MS104 (opt-in), an unsafe operation without a `// SAFETY:` comment | catalog, directive, flow, lazyssa, locate, prefilter, report, trace |
 | `internal/cmd/bench` | Development command: the benchmark harness (design §7.1) | frontend, trace |
 | `internal/cmd/rsswrap` | Development command: `-toolexec` wrapper recording each compile's peak RSS | trace |
 | `internal/directive` | `//memsafe:` parsing: suppressions, view contracts (`viewof`, `invalidates`); MS000 | catalog, effect, vetmode |

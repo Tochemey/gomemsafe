@@ -8,6 +8,7 @@
 - `//memsafe:viewof` and `//memsafe:invalidates` declare the views of other types and the calls that end them, which MS302 follows in callers in any package.
 - MS302 follows views through helper functions in other packages, using per-function summaries: a helper that returns a view of a parameter, or ends a parameter's views.
 - MS101 reports a `uintptr` turned back into a pointer in a way `go vet` cannot see.
+- MS102 reports a string used after a write into the bytes it shares with a `[]byte` through `unsafe.String` or `unsafe.Slice`.
 - MS103 reports a `reflect.SliceHeader` or `reflect.StringHeader` value used as memory.
 - MS104 reports an `unsafe` operation without a `// SAFETY:` comment, enabled with `-unsafeflow.safety`.
 - MS000 reports a `//memsafe:` directive that is malformed or not supported.
