@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package suppress silences MS101 and MS103 with a reason.
+// Package suppress silences MS101, MS102, and MS103 with a reason.
 package suppress
 
 import (
@@ -38,4 +38,12 @@ func allowedHeader(data uintptr, n int) []byte {
 
 	//memsafe:allow MS103 data is C memory that the caller frees after the last use
 	return *(*[]byte)(unsafe.Pointer(&h))
+}
+
+func allowedMutation(b []byte) string {
+	s := unsafe.String(&b[0], len(b))
+	b[0] = 'x'
+
+	//memsafe:allow MS102 s is a scratch key that nothing keeps
+	return s
 }

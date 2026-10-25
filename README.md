@@ -16,6 +16,7 @@ collector. It runs as a `go vet` tool, with zero runtime cost and no language ch
 | **MS301** | A value used after it was returned to a `sync.Pool`, including through helper functions in other packages |
 | **MS302** | A view, such as the slice from `bytes.Buffer.Bytes` or `bufio.Scanner.Bytes`, or one your own types declare, used after a call on its buffer ended it, including through helper functions in other packages |
 | **MS101** | A `uintptr` turned back into a pointer in a way `go vet` cannot see |
+| **MS102** | A string used after a write into the bytes it shares with a `[]byte` through `unsafe.String` or `unsafe.Slice` |
 | **MS103** | A `reflect.SliceHeader` or `reflect.StringHeader` value used as memory |
 | **MS104** | An `unsafe` operation without a `// SAFETY:` comment (opt-in: `-unsafeflow.safety`) |
 

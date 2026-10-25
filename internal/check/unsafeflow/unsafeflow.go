@@ -20,8 +20,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package unsafeflow is the family of checks on unsafe.Pointer, MS101 to MS104. MS101, MS103,
-// and MS104 are implemented.
+// Package unsafeflow is the family of checks on unsafe.Pointer, MS101 to MS104, all
+// implemented.
 //
 // MS101 is a uintptr turned back into a pointer in a way plain vet cannot see. vet's unsafeptr
 // pass already reports every conversion from a uintptr to unsafe.Pointer outside the forms the
@@ -39,6 +39,13 @@
 // updated the address when the memory moved. An address outside that memory, such as machine
 // code or memory from C or mmap, is reported too, because nothing in the code tells the two
 // apart; such a finding is suppressed with //memsafe:allow MS101 and the reason.
+//
+// MS102 is a string used after a write into the bytes it shares with a byte buffer, through
+// unsafe.String over the buffer or unsafe.Slice over the string (file mutation.go). Go promises
+// that a string never changes; such a write breaks the promise for every holder of the string,
+// such as a map that keys on it. It is the one check of the family that follows values through
+// a function: it lowers to SSA only the functions that make such a string, and reports a use
+// only when a write that lands in the string's bytes ran on every path to it.
 //
 // MS103 is a reflect.SliceHeader or reflect.StringHeader value whose address is taken as an
 // unsafe.Pointer, such as *(*[]byte)(unsafe.Pointer(&h)). The reflect package allows the
@@ -71,6 +78,8 @@ import (
 
 	"github.com/tochemey/gomemsafe/internal/catalog"
 	"github.com/tochemey/gomemsafe/internal/directive"
+	"github.com/tochemey/gomemsafe/internal/lazyssa"
+	"github.com/tochemey/gomemsafe/internal/prefilter"
 	"github.com/tochemey/gomemsafe/internal/report"
 )
 
@@ -78,6 +87,8 @@ import (
 const (
 	// RoundTripID is the check ID of a uintptr turned back into a pointer.
 	RoundTripID = catalog.UnsafePointerRoundTrip
+	// MutationID is the check ID of a string used after a write into the bytes it shares.
+	MutationID = catalog.MutatedStringView
 	// HeaderID is the check ID of a reflect header value used as memory.
 	HeaderID = catalog.ReflectHeaderMisuse
 	// SafetyID is the check ID of an unsafe operation without a // SAFETY: comment.
@@ -111,9 +122,10 @@ const (
 var Analyzer = &analysis.Analyzer{
 	Name: "unsafeflow",
 	Doc: "reports uintptr values turned back into pointers in ways go vet's unsafeptr cannot see (MS101), " +
+		"strings used after a write into the bytes they share through unsafe.String or unsafe.Slice (MS102), " +
 		"reflect header values used as memory (MS103), and, with -unsafeflow.safety, unsafe operations " +
 		"without a // SAFETY: comment (MS104)",
-	Requires: []*analysis.Analyzer{directive.Analyzer, inspect.Analyzer},
+	Requires: []*analysis.Analyzer{directive.Analyzer, inspect.Analyzer, prefilter.Analyzer, lazyssa.Analyzer},
 	Run:      run,
 }
 
@@ -126,9 +138,15 @@ var headerHelp = map[string]string{
 // run needs no facts-only short-circuit: unsafeflow requires no fact producer, so unitchecker
 // does not run it on dependencies at all.
 func run(pass *analysis.Pass) (any, error) {
+	var views []token.Pos
+
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 	insp.Preorder([]ast.Node{(*ast.CallExpr)(nil)}, func(n ast.Node) {
 		call := n.(*ast.CallExpr)
+
+		if makesStringView(pass.TypesInfo, call) {
+			views = append(views, call.Pos())
+		}
 
 		if addr, ok := matchReinterpretation(pass.TypesInfo, call); ok {
 			reportReinterpretation(pass, addr)
@@ -146,6 +164,8 @@ func run(pass *analysis.Pass) (any, error) {
 			reportAt(pass, RoundTripID, call.Pos(), fmt.Sprintf(msgAddToNil, RoundTripID), helpAddToNil)
 		}
 	})
+
+	reportMutatedViews(pass, views)
 
 	if enforceSafety {
 		reportUnjustified(pass, insp)

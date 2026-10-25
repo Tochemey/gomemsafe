@@ -138,3 +138,19 @@ func passedToInterface(s sink) {
 
 	s.take(b) // want `MS301: b used after it was returned to sync.Pool`
 }
+
+func mapUpdate(m map[*box]int) {
+	b := new(box)
+	pool.Put(b)
+
+	m[b] = 1 // want `MS301: b used after it was returned to sync.Pool`
+}
+
+func returnedWithDefer(done func()) *box {
+	defer done()
+
+	b := new(box)
+	pool.Put(b)
+
+	return b // want `MS301: b used after it was returned to sync.Pool`
+}
