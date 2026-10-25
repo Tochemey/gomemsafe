@@ -25,7 +25,8 @@
 //
 // A client describes its analysis as a Problem: the number of facts, a transfer function for
 // ordinary instructions, and a rule for phi nodes, which see the out-state of each incoming
-// edge. Solve computes the fixpoint over the reachable blocks; Walk then replays it,
+// edge. A problem may also have effects on edges (EdgeProblem), for what happens only on the way
+// into one successor. Solve computes the fixpoint over the reachable blocks; Walk then replays it,
 // presenting the state before each instruction, which is where checks look for violations.
 //
 // The engine is built for speed: facts are bitsets, blocks are visited from a work list in

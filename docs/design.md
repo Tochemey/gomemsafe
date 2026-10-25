@@ -226,7 +226,7 @@ applies, so the command line never mentions tiers.
 
 | ID | Check | Example |
 |---|---|---|
-| MS501 | Use after move: a value of an `//memsafe:owned` type (or passed to a `consumes` parameter) is used after being sent on a channel, passed to a consuming parameter, or stored into another owner | `out <- f; f.data[0] = 1` |
+| MS501 | Use after move: a value is used after its ownership moved. A value of an `//memsafe:owned` type, or a pointer to one, moves when it is sent on a channel (in a `select`, only when its case runs) or stored into a field, element, or map entry of another owned value, including in a composite literal; any value moves when it is passed to a `//memsafe:consumes` parameter, by a call or a `go` statement, not by a `defer`, which takes it only at the return. As in Rust, a use is reported when the value moved on some path to it, not only on every path, unless the variable was assigned again since. Conversions to other types and interfaces, phis, and the local variable a moved value was loaded from are followed. A copy kept in memory before the move, a variable captured by a function literal, a global, and calls of interface methods or function values are not. A comparison with `nil` is no use. | `out <- f; f.data[0] = 1` |
 | MS502 | A borrowed parameter escapes the call | `//memsafe:borrows p` then `h.raw = p` |
 | MS503 | `append` aliasing: a slice is reused after `append` on a shared prefix of the same backing array. Applies to owned or borrowed slices; enable `-ownership.appendalias` to check every slice. | `b := append(a[:i], x); use(a)` |
 
@@ -253,9 +253,9 @@ code works unchanged.
 |---|---|---|
 | Package | `//memsafe:strict` | Enables Tier 3 |
 | Package | `//memsafe:forbid unsafe,cgo` | A narrower form of strict |
-| Type | `//memsafe:owned` | Values have move semantics on send or consume (enables MS501) |
+| Type | `//memsafe:owned` | Values have move semantics: a send on a channel, or a store into another owner, moves them (MS501) |
 | Field | `// +checklocks:<lock>` *(checklocks syntax)* | Access requires holding the named lock |
-| Func | `//memsafe:consumes <param>` | Ownership moves to the callee |
+| Func | `//memsafe:consumes <param>` | Ownership of the argument moves to the callee: the caller must not use it again (MS501) |
 | Func | `//memsafe:borrows <param>` | The parameter must not escape the call |
 | Func | `//memsafe:viewof <param>` | The first result is a view into the parameter, valid until a call ends the parameter's views: one that `invalidates` declares, or any call the standard library documents as ending views of it (MS302) |
 | Func | `//memsafe:invalidates <param>` | A call ends every outstanding view of the parameter (MS302) |

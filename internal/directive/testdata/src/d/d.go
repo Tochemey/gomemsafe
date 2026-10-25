@@ -31,7 +31,7 @@ package d
 
 /* want `MS000: unknown directive //memsafe:alow` */ //memsafe:alow MS301 typo
 
-/* want `MS000: //memsafe:owned is not supported yet by this version of gomemsafe` */ //memsafe:owned
+/* want `MS000: //memsafe:strict is not supported yet by this version of gomemsafe` */ //memsafe:strict
 
 //memsafe:allow MS301,MS302 both are allowed here for a reason
 var x int
@@ -82,3 +82,42 @@ func Malformed(b *Buffer, _ int) {}
 //memsafe:viewof a
 /* want `MS000: //memsafe:viewof declares the view of Twice twice` */ //memsafe:viewof b
 func Twice(a, b *Buffer) []byte { return nil }
+
+// Frame is owned.
+//
+//memsafe:owned
+type Frame struct{ data []byte }
+
+type (
+	// Packet is owned, in a group.
+	//
+	//memsafe:owned
+	Packet struct{}
+
+	// Plain is not owned.
+	Plain struct{}
+)
+
+// Grouped documents a group of types, not one type.
+//
+/* want `MS000: //memsafe:owned must be in the doc comment of a type declaration` */ //memsafe:owned
+type (
+	First  struct{}
+	Second struct{}
+)
+
+// Argued gives the directive an argument.
+//
+/* want `MS000: //memsafe:owned takes no arguments, and Argued gives "x"` */ //memsafe:owned x
+type Argued struct{}
+
+// Consume takes ownership of f.
+//
+//memsafe:consumes f
+func Consume(n int, f *Frame) {}
+
+// Owner documents a variable.
+//
+/* want `MS000: //memsafe:owned must be in the doc comment of a type declaration` */ //memsafe:owned
+/* want `MS000: //memsafe:consumes must be in the doc comment of a function or method declaration` */ //memsafe:consumes x
+var owner int

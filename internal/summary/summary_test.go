@@ -110,6 +110,83 @@ func TestResultResolvesViews(t *testing.T) {
 	}
 }
 
+func TestExportsOwnershipFacts(t *testing.T) {
+	analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "owner")
+}
+
+// TestResultResolvesOwnership resolves owned types and consuming parameters in the package that
+// declares them and, through facts, in one that imports them: there, Box[int] is an instance
+// of the generic owned type.
+func TestResultResolvesOwnership(t *testing.T) {
+	results := analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "owner", "ownerclient")
+
+	for _, r := range results {
+		res := r.Result.(*summary.Result)
+		scope := r.Pass.Pkg.Scope()
+
+		owned, notOwned := []types.Type{}, []types.Type{types.Typ[types.Int]}
+
+		if r.Pass.Pkg.Path() == "owner" {
+			frame := scope.Lookup("Frame").Type()
+			owned = append(owned, frame, types.NewPointer(frame), scope.Lookup("Box").Type())
+			notOwned = append(notOwned, scope.Lookup("Plain").Type(), types.NewPointer(types.NewPointer(frame)))
+		} else {
+			owned = append(owned, scope.Lookup("frame").Type(), types.NewPointer(scope.Lookup("box").Type()))
+			// plain twice: the second answer comes from the cache of imported types.
+			notOwned = append(notOwned, scope.Lookup("plain").Type(), scope.Lookup("plain").Type())
+		}
+
+		for _, typ := range owned {
+			if !res.Owned(typ) {
+				t.Errorf("%s: Owned(%s) = false, want true", r.Pass.Pkg.Path(), typ)
+			}
+		}
+
+		for _, typ := range notOwned {
+			if res.Owned(typ) {
+				t.Errorf("%s: Owned(%s) = true, want false", r.Pass.Pkg.Path(), typ)
+			}
+		}
+
+		if !res.Annotated() {
+			t.Errorf("%s: Annotated = false, want true", r.Pass.Pkg.Path())
+		}
+	}
+
+	owner := results[0].Pass.Pkg
+	if got := results[0].Result.(*summary.Result).Consumes(owner.Scope().Lookup("Release").(*types.Func)); got != 0b1 {
+		t.Errorf("Consumes(Release) = %#x, want 0x1", uint64(got))
+	}
+}
+
+// TestAnnotatedByAConsumingParameterAlone covers a package that declares a consuming parameter
+// and no owned type, and one that learns of it from a fact.
+func TestAnnotatedByAConsumingParameterAlone(t *testing.T) {
+	for _, r := range analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "consumer", "consumerclient") {
+		if !r.Result.(*summary.Result).Annotated() {
+			t.Errorf("%s: Annotated = false, want true", r.Pass.Pkg.Path())
+		}
+	}
+}
+
+// TestAnnotatedByAnOwnedTypeAlone covers a package that learns of an owned type from a fact and
+// of no consuming parameter.
+func TestAnnotatedByAnOwnedTypeAlone(t *testing.T) {
+	r := analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "ownedonlyclient")[0]
+	if !r.Result.(*summary.Result).Annotated() {
+		t.Fatal("Annotated = false, want true")
+	}
+}
+
+// TestAnnotatedIsFalseWithoutOwnership covers a package that, like its dependencies, declares
+// no owned type and no consuming parameter, though it has facts of other kinds.
+func TestAnnotatedIsFalseWithoutOwnership(t *testing.T) {
+	r := analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "helper")[0]
+	if r.Result.(*summary.Result).Annotated() {
+		t.Fatal("Annotated = true, want false")
+	}
+}
+
 func TestFactString(t *testing.T) {
 	for _, tc := range []struct {
 		fact summary.Fact
@@ -118,6 +195,7 @@ func TestFactString(t *testing.T) {
 		{summary.Fact{Invalidates: effect.ArgSet(0b101)}, "invalidates(0x5)"},
 		{summary.Fact{View: effect.View{Arg: 1, EndedBy: effect.Write}}, "viewof(1: 0x2)"},
 		{summary.Fact{Events: []effect.Event{effect.Clear, 0, effect.All}}, "ends(0: 0x4, 2: 0xf)"},
+		{summary.Fact{Consumes: 0b10}, "consumes(0x2)"},
 		{
 			summary.Fact{Invalidates: 1, View: effect.View{EndedBy: effect.Read}, Events: []effect.Event{effect.Read}},
 			"invalidates(0x1) viewof(0: 0x1) ends(0: 0x1)",
@@ -126,5 +204,11 @@ func TestFactString(t *testing.T) {
 		if got := tc.fact.String(); got != tc.want {
 			t.Errorf("String() = %q, want %q", got, tc.want)
 		}
+	}
+}
+
+func TestOwnedFactString(t *testing.T) {
+	if got := (&summary.OwnedFact{Owned: true}).String(); got != "owned" {
+		t.Fatalf("String() = %q, want owned", got)
 	}
 }

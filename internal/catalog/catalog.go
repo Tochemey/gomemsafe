@@ -56,6 +56,9 @@ const (
 	// UseOfInvalidatedView is a use of a view, such as the slice from bytes.Buffer.Bytes, after
 	// a call on its owner ended it.
 	UseOfInvalidatedView ID = "MS302"
+	// UseAfterMove is a use of a value after its ownership moved: an owned value sent on a
+	// channel or stored into another owner, or any value passed to a consuming parameter.
+	UseAfterMove ID = "MS501"
 )
 
 // Planned checks. Their IDs are reserved so that code can be annotated ahead of the check.
@@ -67,7 +70,6 @@ const (
 	UnsynchronizedCapture ID = "MS401"
 	ConcurrentMapAccess   ID = "MS402"
 	UnguardedField        ID = "MS403"
-	UseAfterMove          ID = "MS501"
 	EscapingBorrow        ID = "MS502"
 	AppendAliasing        ID = "MS503"
 	ForbiddenImport       ID = "MS901"
