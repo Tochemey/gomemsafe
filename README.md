@@ -14,7 +14,7 @@ collector. It runs as a `go vet` tool, with zero runtime cost and no language ch
 | ID | Reports |
 |---|---|
 | **MS301** | A value used after it was returned to a `sync.Pool`, including through helper functions in other packages |
-| **MS302** | A view, such as the slice from `bytes.Buffer.Bytes` or `bufio.Scanner.Bytes`, used after a call on its buffer ended it |
+| **MS302** | A view, such as the slice from `bytes.Buffer.Bytes` or `bufio.Scanner.Bytes`, or one your own types declare, used after a call on its buffer ended it, including through helper functions in other packages |
 | **MS101** | A `uintptr` turned back into a pointer in a way `go vet` cannot see |
 | **MS103** | A `reflect.SliceHeader` or `reflect.StringHeader` value used as memory |
 | **MS104** | An `unsafe` operation without a `// SAFETY:` comment (opt-in: `-unsafeflow.safety`) |
@@ -58,7 +58,7 @@ annotation language, with every directive, its scope, and examples, is in
 [docs/design.md §6](docs/design.md#6-annotation-language). The checks each directive enables
 are in the [check catalogue, §5](docs/design.md#5-check-catalogue).
 
-One directive is enforced today:
+Three directives are enforced today. The first is a suppression:
 
 ```go
 //memsafe:allow MS301 the buffer is copied before Put returns
@@ -66,8 +66,24 @@ buf.WriteString(p)
 ```
 
 It suppresses the named checks on its own line and on the next line, and the reason is
-mandatory. The other directives are recognised, but reported as `MS000: not supported yet`, so
-a contract that nothing checks never looks checked.
+mandatory. The other two declare the views of your own types, for MS302:
+
+```go
+// Bytes returns a view that is valid until the next Reset.
+//
+//memsafe:viewof b
+func (b *Buffer) Bytes() []byte { return b.b }
+
+// Reset empties the buffer.
+//
+//memsafe:invalidates b
+func (b *Buffer) Reset() { b.b = b.b[:0] }
+```
+
+`viewof` says that the first result is a view into the named parameter, and `invalidates` that
+a call ends every view of it. Callers in any package then get `MS302` for `v := buf.Bytes();
+buf.Reset(); use(v)`. The other directives are recognised, but reported as
+`MS000: not supported yet`, so a contract that nothing checks never looks checked.
 
 With `-unsafeflow.safety`, every `unsafe` operation needs a `// SAFETY:` comment on the line
 above its statement, saying why it is safe:
@@ -109,8 +125,8 @@ gomemsafe complements plain `go vet`, so keep running it: its `unsafeptr`, `copy
 `cgocall` passes are on by default, and gomemsafe reports only what they cannot see. What it
 adds, and what no other tool provides, is lifetime checking: a value returned to a
 `sync.Pool`, or a view of a `bytes.Buffer`, `bufio.Scanner`, `bufio.Reader`, or
-`bufio.Writer`, used after it stopped being valid. Values returned to a pool are followed
-through helper functions in other packages. All of it runs as one cached vet pass. See [design §1.1](docs/design.md#11-prior-art).
+`bufio.Writer`, used after it stopped being valid. Values returned to a pool, and views and the
+calls that end them, are followed through helper functions in other packages. All of it runs as one cached vet pass. See [design §1.1](docs/design.md#11-prior-art).
 
 ## What a clean run does and does not mean
 

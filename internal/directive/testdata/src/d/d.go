@@ -38,3 +38,47 @@ var x int
 
 // A comment that merely mentions memsafe:allow is not a directive.
 var y = x
+
+/* want `MS000: //memsafe:viewof must be in the doc comment of a function or method declaration` */ //memsafe:viewof x
+
+// Buffer holds bytes.
+//
+/* want `MS000: //memsafe:invalidates must be in the doc comment of a function or method declaration` */ //memsafe:invalidates b
+type Buffer struct{ b []byte }
+
+// Bytes returns a view of b.
+//
+//memsafe:viewof b
+func (b *Buffer) Bytes() []byte { return b.b }
+
+// Reset ends the views of b.
+//
+//memsafe:invalidates b
+func (b *Buffer) Reset() { b.b = b.b[:0] }
+
+// Swap declares contracts on two arguments, after the receiver.
+//
+//memsafe:viewof from
+//memsafe:invalidates to
+//memsafe:invalidates from
+func (*Buffer) Swap(n int, from, to *Buffer) []byte { return nil }
+
+// Unnamed counts its unnamed parameter as an argument.
+//
+//memsafe:viewof b
+func Unnamed(int, b *Buffer) []byte { return nil }
+
+// Malformed holds contracts that name no parameter, or the wrong one.
+//
+/* want `MS000: //memsafe:viewof must name one parameter of Malformed` */ //memsafe:viewof
+/* want `MS000: //memsafe:invalidates must name one parameter of Malformed` */ //memsafe:invalidates b c
+/* want `MS000: //memsafe:invalidates names c, which is not a parameter of Malformed` */ //memsafe:invalidates c
+/* want `MS000: //memsafe:invalidates names _, which is not a parameter of Malformed` */ //memsafe:invalidates _
+/* want `MS000: //memsafe:viewof needs a result to be the view, and Malformed returns nothing` */ //memsafe:viewof b
+func Malformed(b *Buffer, _ int) {}
+
+// Twice declares its view twice.
+//
+//memsafe:viewof a
+/* want `MS000: //memsafe:viewof declares the view of Twice twice` */ //memsafe:viewof b
+func Twice(a, b *Buffer) []byte { return nil }

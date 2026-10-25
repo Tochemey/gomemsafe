@@ -33,6 +33,8 @@
 // write, a clear, or a ReadLine (MS302). Every view and every event cites the documentation it comes
 // from. Where the documentation does not say that a call ends a view, the call has no event,
 // even if the implementation overwrites the buffer: a missed bug is better than a false one.
+// Known views and events take precedence over computed summaries too, which derive the views
+// and events of code that calls these.
 //
 // To teach gomemsafe another effect, add the callee's full name (as types.Func.FullName prints
 // it) to known, views, or events. Argument indexes count the receiver as 0, matching the
@@ -188,7 +190,20 @@ const (
 	Clear
 	// LineRead is a call of bufio.Reader.ReadLine, the only event that ends its result.
 	LineRead
+
+	// All is every event. A call that a //memsafe:invalidates directive declares is all of them
+	// on its argument, so it ends every view of it; a view that a //memsafe:viewof directive
+	// declares is ended by any of them.
+	All = Read | Write | Clear | LineRead
 )
+
+// View is what a call's first result points into: the buffer of call argument Arg. It stays
+// valid until a call that is one of the events EndedBy on that argument. Every view is ended by
+// some event, so the zero View is no view.
+type View struct {
+	Arg     int
+	EndedBy Event
+}
 
 // Of returns the known invalidation of fn, if it has one.
 func Of(fn *types.Func) (Invalidation, bool) {
@@ -201,16 +216,16 @@ func Of(fn *types.Func) (Invalidation, bool) {
 	return inv, ok
 }
 
-// ViewOf returns the events that end the view fn returns, if fn's first result is a view into
-// its receiver's buffer.
-func ViewOf(fn *types.Func) (Event, bool) {
+// ViewOf returns the view fn returns, if fn's first result is a view into its receiver's
+// buffer.
+func ViewOf(fn *types.Func) (View, bool) {
 	if fn == nil {
-		return 0, false
+		return View{}, false
 	}
 
 	ended, ok := views[fn.Origin().FullName()]
 
-	return ended, ok
+	return View{Arg: 0, EndedBy: ended}, ok
 }
 
 // EventsOf returns the events that a call of fn is on its receiver: zero for most functions.

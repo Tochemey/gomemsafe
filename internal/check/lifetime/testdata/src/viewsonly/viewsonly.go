@@ -20,12 +20,12 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package viewsonly makes views but never calls anything that ends one, so the check has
-// nothing to follow and builds no SSA.
+// Package viewsonly makes views but never calls anything that ends one, and returns none, so
+// neither the check nor the summaries have anything to follow, and no SSA is built.
 package viewsonly
 
 import "bytes"
 
-func contents(buf *bytes.Buffer) []byte {
-	return buf.Bytes()
+func size(buf *bytes.Buffer) int {
+	return len(buf.Bytes())
 }

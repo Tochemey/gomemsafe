@@ -43,11 +43,13 @@
 // value was invalid on its edge. Values loaded from memory (fields, address-taken variables)
 // are not tracked: Tier 1 may miss such bugs, but never reports a false one.
 //
-// AnalyzeWithViews also tracks views (file views.go): results that point into a receiver's
-// buffer, made invalid by a later call on that receiver.
+// AnalyzeWithViews also tracks views (file views.go): results that point into an argument's
+// buffer, made invalid by a later call that ends the views of that argument.
 //
 // Analyze builds the problem and solves it with package flow; Uses lists violations for
-// checks, and InvalidAtReturn lists invalidated parameters for summaries.
+// checks, and InvalidAtReturn lists invalidated parameters for summaries. ViewAtReturn and
+// EventsAtReturn (file returns.go) give summaries the view a function returns and the events it
+// is on its parameters.
 package invalidation
 
 import (
@@ -60,8 +62,16 @@ import (
 	"github.com/tochemey/gomemsafe/internal/flow"
 )
 
-// Lookup returns the call-argument indexes that a static callee invalidates.
-type Lookup func(fn *types.Func) effect.ArgSet
+// Lookup resolves what a static callee does to its call arguments, receiver first for
+// methods: from known effects, directives, and summaries.
+type Lookup interface {
+	// Invalidates returns the call arguments the callee takes back.
+	Invalidates(fn *types.Func) effect.ArgSet
+	// ViewOf returns the view the callee's first result is, if it is one.
+	ViewOf(fn *types.Func) (effect.View, bool)
+	// EventsOn returns the events a call of the callee is on call argument arg.
+	EventsOn(fn *types.Func, arg int) effect.Event
+}
 
 // Site is one invalidating call.
 type Site struct {
@@ -120,26 +130,34 @@ func AnalyzeWithViews(fn *ssa.Function, lookup Lookup, eng *flow.Engine) *Analys
 	return analyze(fn, lookup, eng, true)
 }
 
-func analyze(fn *ssa.Function, lookup Lookup, eng *flow.Engine, withViews bool) *Analysis {
-	a := &Analysis{
-		Fn:      fn,
-		classOf: make(map[ssa.Value]int),
-		siteOf:  make(map[*ssa.Call][]int),
+// SharesMemory reports whether a value of type t refers to memory that a call can keep, so
+// that the caller must not use it afterwards, and that a view can point into. A type parameter
+// does not: whether it shares memory depends on the instantiation.
+func SharesMemory(t types.Type) bool {
+	if isTypeParam(t) {
+		return false
 	}
 
-	var calls []*ssa.Call
+	switch u := t.Underlying().(type) {
+	case *types.Pointer, *types.Slice, *types.Map, *types.Chan, *types.Signature, *types.Interface:
+		return true
+	case *types.Basic:
+		return u.Kind() == types.UnsafePointer
+	}
 
-	for _, b := range fn.Blocks {
-		for _, instr := range b.Instrs {
-			if call, ok := instr.(*ssa.Call); ok {
-				calls = append(calls, call)
-				a.addSite(call, lookup)
-			}
-		}
+	return false
+}
+
+func analyze(fn *ssa.Function, lookup Lookup, eng *flow.Engine, withViews bool) *Analysis {
+	a := newAnalysis(fn)
+
+	calls := callsOf(fn)
+	for _, call := range calls {
+		a.addSite(call, lookup)
 	}
 
 	if withViews {
-		a.addViews(calls)
+		a.addViews(calls, lookup)
 	}
 
 	if len(a.Sites) == 0 && len(a.views) == 0 {
@@ -149,7 +167,7 @@ func analyze(fn *ssa.Function, lookup Lookup, eng *flow.Engine, withViews bool) 
 	a.closeOverAliases()
 
 	if withViews {
-		a.endViews(calls)
+		a.endViews(calls, lookup)
 	}
 
 	if len(a.Sites) == 0 {
@@ -301,6 +319,10 @@ func (a *Analysis) InvalidAtReturn() []bool {
 	return out
 }
 
+func newAnalysis(fn *ssa.Function) *Analysis {
+	return &Analysis{Fn: fn, classOf: make(map[ssa.Value]int), siteOf: make(map[*ssa.Call][]int)}
+}
+
 // addSite records call as a site if its static callee invalidates any non-constant argument
 // that shares memory with the caller.
 func (a *Analysis) addSite(call *ssa.Call, lookup Lookup) {
@@ -309,7 +331,7 @@ func (a *Analysis) addSite(call *ssa.Call, lookup Lookup) {
 		return
 	}
 
-	bits := lookup(callee)
+	bits := lookup.Invalidates(callee)
 	if bits == 0 {
 		return
 	}
@@ -328,7 +350,7 @@ func (a *Analysis) addSite(call *ssa.Call, lookup Lookup) {
 		}
 
 		base := Base(arg)
-		if !sharesMemory(base.Type()) && !isTypeParam(base.Type()) {
+		if !SharesMemory(base.Type()) && !isTypeParam(base.Type()) {
 			continue
 		}
 
@@ -434,24 +456,6 @@ func arity(sig *types.Signature) int {
 	}
 
 	return n
-}
-
-// sharesMemory reports whether a value of type t refers to memory that a call can keep, so
-// that the caller must not use it afterwards. A type parameter does not: whether it shares
-// memory depends on the instantiation.
-func sharesMemory(t types.Type) bool {
-	if isTypeParam(t) {
-		return false
-	}
-
-	switch u := t.Underlying().(type) {
-	case *types.Pointer, *types.Slice, *types.Map, *types.Chan, *types.Signature, *types.Interface:
-		return true
-	case *types.Basic:
-		return u.Kind() == types.UnsafePointer
-	}
-
-	return false
 }
 
 func isUse(instr ssa.Instruction) bool {

@@ -15,10 +15,12 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
             └─ cmd/gomemsafe in vet-tool mode
                  ├─ vetmode: is this a facts-only run (a dependency)?
                  └─ unitchecker.Main(analyzers.All()...)
-                      ├─ directive    parse //memsafe: comments; report MS000
-                      ├─ prefilter    which function calls which static callee
+                      ├─ directive    parse //memsafe: comments, view contracts; report MS000
+                      ├─ prefilter    which function calls which static callee, and passes it
+                      │               a parameter
                       ├─ lazyssa      SSA for the package, built only if asked
-                      ├─ summary      per-function Invalidates facts → .vetx (all packages)
+                      ├─ summary      per-function facts → .vetx (all packages): the arguments
+                      │               taken back, the view returned, the views ended
                       └─ checks       lifetime (MS301, MS302), skipped in facts-only runs;
                                       unsafeflow (MS101, MS103; MS104 with -unsafeflow.safety), not run in facts-only runs
                            └─ lifetime: invalidation + flow, must-dataflow on SSA
@@ -37,15 +39,15 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it; MS103, a reflect header value used as memory; MS104 (opt-in), an unsafe operation without a `// SAFETY:` comment | catalog, directive, report |
 | `internal/cmd/bench` | Development command: the benchmark harness (design §7.1) | frontend, trace |
 | `internal/cmd/rsswrap` | Development command: `-toolexec` wrapper recording each compile's peak RSS | trace |
-| `internal/directive` | `//memsafe:` parsing; MS000 | catalog, vetmode |
+| `internal/directive` | `//memsafe:` parsing: suppressions, view contracts (`viewof`, `invalidates`); MS000 | catalog, effect, vetmode |
 | `internal/flow` | Must-dataflow engine over SSA | none |
 | `internal/frontend` | Runs vet, decodes its JSON (`Decode`), renders, exit codes, `-stats` | trace |
 | `internal/effect` | Known effects of library calls: invalidations (`sync.Pool.Put`), and the standard library's views and the events that end them | none |
-| `internal/invalidation` | Tracks invalidated values, and views that were ended, through one function | effect, flow |
+| `internal/invalidation` | Tracks invalidated values, and views that were ended, through one function; the view a function returns and the events it is on its parameters, for summaries | effect, flow |
 | `internal/lazyssa` | Builds SSA on demand, once | trace |
-| `internal/prefilter` | Static callees per function; calls by position | none |
+| `internal/prefilter` | Static callees per function, and those passed a parameter; calls by position | none |
 | `internal/report` | The one way checks emit diagnostics | directive |
-| `internal/summary` | Invalidates facts, the only fact producer | effect, invalidation, lazyssa, prefilter |
+| `internal/summary` | Facts of what each function does to its arguments (taken back, viewed, views ended), the only fact producer | directive, effect, flow, invalidation, lazyssa, prefilter |
 | `internal/trace` | `GOMEMSAFE_TRACE` timing events | vetmode |
 | `internal/vetmode` | Vet-tool invocation and facts-only detection | none |
 
@@ -66,7 +68,10 @@ name as `types.Func.FullName` prints it, declared as a constant.
 - **A view** is a result that points into the receiver's buffer, like `bufio.Scanner.Bytes`:
   add it to `views` with the events that end it, and add the calls that are those events, like
   `bufio.Scanner.Scan`, to `events`. Quote the documentation sentence each entry relies on.
-  When the documentation does not say a call ends a view, leave the call out.
+  When the documentation does not say a call ends a view, leave the call out. Functions that
+  return such a view of a parameter, or call such an event on one, need nothing: `summary`
+  derives their facts too. Code outside the standard library declares its own views with
+  `//memsafe:viewof` and `//memsafe:invalidates` instead.
 
 Then:
 

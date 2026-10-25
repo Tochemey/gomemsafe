@@ -70,9 +70,10 @@ func TestViewOfKnowsTheStandardLibraryViews(t *testing.T) {
 		{"bufio", "Reader", "ReadSlice", Read},
 		{"bufio", "Reader", "ReadLine", LineRead},
 	} {
-		ended, ok := ViewOf(method(t, tc.path, tc.typ, tc.name))
-		if !ok || ended != tc.ended {
-			t.Errorf("ViewOf(%s.%s.%s) = %b, %v; want %b, true", tc.path, tc.typ, tc.name, ended, ok, tc.ended)
+		view, ok := ViewOf(method(t, tc.path, tc.typ, tc.name))
+		if !ok || view != (View{Arg: 0, EndedBy: tc.ended}) {
+			t.Errorf("ViewOf(%s.%s.%s) = %+v, %v; want a view of the receiver ended by %b",
+				tc.path, tc.typ, tc.name, view, ok, tc.ended)
 		}
 	}
 }
@@ -165,6 +166,22 @@ func TestEveryEntryNamesARealMethod(t *testing.T) {
 
 		if got := method(t, m[1], m[2], m[3]).FullName(); got != name {
 			t.Errorf("%q resolves to %q", name, got)
+		}
+	}
+}
+
+// TestAllHoldsEveryEvent checks that every event the tables use is in All, so that a directive
+// that declares all of them ends every view.
+func TestAllHoldsEveryEvent(t *testing.T) {
+	for name, ended := range views {
+		if ended&All != ended {
+			t.Errorf("%s is ended by %b, outside All", name, ended)
+		}
+	}
+
+	for name, e := range events {
+		if e&All != e {
+			t.Errorf("%s is the events %b, outside All", name, e)
 		}
 	}
 }

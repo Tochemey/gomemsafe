@@ -107,6 +107,13 @@ func (releaser) free(x *int) {}
 func methodValue(r releaser, x *int) { f := r.free; f(x); use(x) }
 `
 
+// lookup is the Lookup of these tests.
+var lookup testLookup
+
+// testLookup treats release and free as taking back their first argument, and resolves views
+// and events from package effect, receiver first.
+type testLookup struct{}
+
 func TestUsesFindUseAfterInvalidation(t *testing.T) {
 	pkg := build(t)
 
@@ -225,6 +232,32 @@ func TestPhiWithNoReachableEdgeIsNotInvalid(t *testing.T) {
 	}
 }
 
+func TestSharesMemory(t *testing.T) {
+	param := types.NewTypeParam(types.NewTypeName(token.NoPos, nil, "T", nil), types.NewInterfaceType(nil, nil))
+
+	for _, tc := range []struct {
+		t    types.Type
+		want bool
+	}{
+		{types.NewPointer(types.Typ[types.Int]), true},
+		{types.NewSlice(types.Typ[types.Byte]), true},
+		{types.NewMap(types.Typ[types.String], types.Typ[types.Int]), true},
+		{types.NewChan(types.SendRecv, types.Typ[types.Int]), true},
+		{types.NewSignatureType(nil, nil, nil, nil, nil, false), true},
+		{types.NewInterfaceType(nil, nil), true},
+		{types.Typ[types.UnsafePointer], true},
+		{types.Typ[types.Int], false},
+		{types.Typ[types.String], false},
+		{types.NewArray(types.Typ[types.Byte], 4), false},
+		{types.NewStruct(nil, nil), false},
+		{param, false},
+	} {
+		if got := invalidation.SharesMemory(tc.t); got != tc.want {
+			t.Errorf("SharesMemory(%s) = %v, want %v", tc.t, got, tc.want)
+		}
+	}
+}
+
 func TestInvalidAtReturn(t *testing.T) {
 	pkg := build(t)
 
@@ -252,13 +285,23 @@ func TestInvalidAtReturn(t *testing.T) {
 	}
 }
 
-func lookup(fn *types.Func) effect.ArgSet {
+func (testLookup) Invalidates(fn *types.Func) effect.ArgSet {
 	switch fn.Name() {
 	case "release", "free":
 		return 1
 	}
 
 	return 0
+}
+
+func (testLookup) ViewOf(fn *types.Func) (effect.View, bool) { return effect.ViewOf(fn) }
+
+func (testLookup) EventsOn(fn *types.Func, arg int) effect.Event {
+	if arg != 0 {
+		return 0
+	}
+
+	return effect.EventsOf(fn)
 }
 
 func analyze(t *testing.T, pkg *ssa.Package, name string) *invalidation.Analysis {

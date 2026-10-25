@@ -68,6 +68,21 @@ func TestBuildsNoSSAForViewsNothingEnds(t *testing.T) {
 	}
 }
 
+// TestReportsViewsOfDirectivesAndSummaries covers views that //memsafe:viewof declares or a
+// helper in another package returns, and the calls that //memsafe:invalidates declares or a
+// helper makes. The help text suggests bytes.Clone only for a []byte view.
+func TestReportsViewsOfDirectivesAndSummaries(t *testing.T) {
+	results := analysistest.Run(t, analysistest.TestData(), Analyzer, "viewuser")
+	for _, r := range results {
+		for _, d := range r.Diagnostics {
+			clone := strings.Contains(d.SuggestedFixes[0].Message, "bytes.Clone")
+			if rows := strings.HasPrefix(d.Message, "MS302: rows "); clone == rows {
+				t.Errorf("%q: help %q", d.Message, d.SuggestedFixes[0].Message)
+			}
+		}
+	}
+}
+
 func TestStaysSilentOnCorrectViewUse(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), Analyzer, "viewsfalsepos")
 }
@@ -79,7 +94,7 @@ func TestPointsAtTheView(t *testing.T) {
 	message := regexp.MustCompile(`^MS302: (\w+) used after (\S+) ended the views into ([\w.]+)$`)
 	related := regexp.MustCompile(`^\w+ is a view into [\w.]+ from (\S+)$`)
 
-	results := analysistest.Run(t, analysistest.TestData(), Analyzer, "views")
+	results := analysistest.Run(t, analysistest.TestData(), Analyzer, "views", "viewuser")
 	for _, r := range results {
 		for _, d := range r.Diagnostics {
 			m := message.FindStringSubmatch(d.Message)

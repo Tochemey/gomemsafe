@@ -119,6 +119,8 @@ func neverEnded(buf *bytes.Buffer) { b := buf.AvailableBuffer(); buf.ReadByte();
 
 func resultUnused(r *bufio.Reader) { r.Peek(1); r.ReadByte() }
 
+func nilBuffer() { b := (*bytes.Buffer)(nil).Bytes(); (*bytes.Buffer)(nil).Reset(); use(b) }
+
 func keepLast(sc *bufio.Scanner) {
 	var last []byte
 	for sc.Scan() {
@@ -442,12 +444,12 @@ func TestMissesOwnersLoadedFromMemory(t *testing.T) {
 	}
 }
 
-// TestViewsNeedAnEndingEvent covers functions with a view that nothing ends, or no view at all:
-// there is nothing to solve.
+// TestViewsNeedAnEndingEvent covers functions with a view that nothing ends, or no view at all,
+// such as a view of a constant nil buffer: there is nothing to solve.
 func TestViewsNeedAnEndingEvent(t *testing.T) {
 	pkg := buildSource(t, viewSrc)
 
-	for _, name := range []string{"neverEnded", "resultUnused", "grownAvailable", "otherConn", "otherField"} {
+	for _, name := range []string{"neverEnded", "resultUnused", "grownAvailable", "otherConn", "otherField", "nilBuffer"} {
 		var eng flow.Engine
 
 		if a := invalidation.AnalyzeWithViews(pkg.Func(name), lookup, &eng); a != nil {

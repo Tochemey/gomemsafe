@@ -34,8 +34,9 @@
 // the check looks only at functions that call an invalidating function, which the summary
 // analyzer marks, or that call both a view and a call that can end one. It lowers those to
 // SSA through lazyssa and asks package invalidation for the uses. Which calls invalidate,
-// return views, or end them comes from package effect (known library effects); invalidations
-// also come from summary facts (code that calls those, in any package).
+// return views, or end them comes from package effect (known library effects), from
+// //memsafe:viewof and //memsafe:invalidates directives, and from summary facts (code that
+// calls any of those, in any package).
 //
 // Every diagnostic carries the use position, related positions at the calls involved, and a
 // help text as a suggested fix without edits, which the front-end prints as "help:".
