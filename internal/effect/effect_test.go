@@ -30,6 +30,10 @@ import (
 	"testing"
 )
 
+// source imports the standard library from source. It keeps every package it imported, so the
+// tests share one instead of type-checking a package again for each lookup.
+var source = importer.ForCompiler(token.NewFileSet(), "source", nil)
+
 func TestOfKnowsPoolPut(t *testing.T) {
 	inv, ok := Of(method(t, "sync", "Pool", "Put"))
 	if !ok {
@@ -199,10 +203,7 @@ func TestArgSetHasRejectsOutOfRange(t *testing.T) {
 func method(t *testing.T, path, typ, name string) *types.Func {
 	t.Helper()
 
-	pkg, err := importer.ForCompiler(token.NewFileSet(), "source", nil).Import(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pkg := importPackage(t, path)
 
 	obj, _, _ := types.LookupFieldOrMethod(types.NewPointer(pkg.Scope().Lookup(typ).Type()), true, pkg, name)
 
@@ -212,4 +213,15 @@ func method(t *testing.T, path, typ, name string) *types.Func {
 	}
 
 	return fn
+}
+
+func importPackage(t *testing.T, path string) *types.Package {
+	t.Helper()
+
+	pkg, err := source.Import(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return pkg
 }

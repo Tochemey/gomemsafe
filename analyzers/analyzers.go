@@ -35,6 +35,7 @@ import (
 
 	"github.com/tochemey/gomemsafe/internal/check/lifetime"
 	"github.com/tochemey/gomemsafe/internal/check/ownership"
+	"github.com/tochemey/gomemsafe/internal/check/sharing"
 	"github.com/tochemey/gomemsafe/internal/check/unsafeflow"
 	"github.com/tochemey/gomemsafe/internal/directive"
 )
@@ -42,7 +43,9 @@ import (
 // All returns every gomemsafe check. Analyzers they depend on, such as the summary
 // analyzer that exports facts, run automatically through Requires.
 func All() []*analysis.Analyzer {
-	return []*analysis.Analyzer{directive.Analyzer, unsafeflow.Analyzer, lifetime.Analyzer, ownership.Analyzer}
+	return []*analysis.Analyzer{
+		directive.Analyzer, unsafeflow.Analyzer, lifetime.Analyzer, sharing.Analyzer, ownership.Analyzer,
+	}
 }
 
 // Default returns the checks that run when no analyzer is selected. That is every check: an

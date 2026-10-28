@@ -23,7 +23,8 @@
 // Package summary computes, for every function, what it does to its arguments on every path to
 // a normal return, and exports that as a Fact: the parameters it takes back (MS301), the
 // parameter its first result is a view into, and the events it is on each parameter's buffer
-// (MS302), and the parameters whose ownership it takes (MS501). Callers in other packages read
+// (MS302), and the parameters whose ownership it takes (MS501). It also records whether a call
+// of the function may synchronise with another goroutine (MS401). Callers in other packages read
 // the fact instead of the callee's body, the way Rust's borrow checker trusts signatures.
 //
 // A function's contract, declared with //memsafe:viewof, //memsafe:invalidates, and
@@ -31,6 +32,14 @@
 // derives from the body is added to it. Ownership is never derived: only a contract declares
 // it. Known effects (package effect) take precedence over both. A type declared with
 // //memsafe:owned gets an OwnedFact, so that its values move in every package.
+//
+// A function synchronises when its body, its function literals included, communicates on a
+// channel or calls a function that may synchronise: one package effect knows, such as
+// sync.WaitGroup.Wait, one whose summary says so, such as errgroup.Group.Wait, or an interface
+// method or a function value, which could be either. What the functions of packages sync and
+// sync/atomic do is known, never derived: their code runs atomic operations even where, like
+// Mutex.Unlock, it completes no edge in the caller. This may-property suppresses reports, so it
+// errs towards true: a function literal that is never called still counts.
 //
 // It is the only gomemsafe analyzer that exports facts, so it is the only one that does work
 // on every dependency: checks that require it also run there, but return immediately. Within
@@ -85,6 +94,9 @@ type Fact struct {
 	Events []effect.Event
 	// Consumes lists the arguments whose ownership the function takes.
 	Consumes effect.ArgSet
+	// Syncs reports whether a call of the function may synchronise with another goroutine. Only
+	// functions that other packages can name, those with exported names, export it.
+	Syncs bool
 }
 
 // OwnedFact marks a type whose values have move semantics: //memsafe:owned in its doc comment.
@@ -103,6 +115,7 @@ type Result struct {
 	pass          *analysis.Pass
 	dir           *directive.Result
 	local         map[*types.Func]Fact
+	syncs         map[*types.Func]bool
 	imported      map[*types.Func]Fact
 	ownedImported map[*types.TypeName]bool
 }
@@ -117,7 +130,8 @@ func (*OwnedFact) String() string { return "owned" }
 
 // String lists the parts of the summary that are set: invalidates(0x1) for the argument set,
 // viewof(0: 0x7) for a view into argument 0 that events 0x7 end, ends(0: 0x4) for the events
-// on argument 0, and consumes(0x2) for the arguments whose ownership the function takes.
+// on argument 0, consumes(0x2) for the arguments whose ownership the function takes, and syncs
+// for a function that may synchronise.
 func (f *Fact) String() string {
 	var parts []string
 
@@ -143,6 +157,10 @@ func (f *Fact) String() string {
 
 	if f.Consumes != 0 {
 		parts = append(parts, fmt.Sprintf("consumes(%#x)", uint64(f.Consumes)))
+	}
+
+	if f.Syncs {
+		parts = append(parts, "syncs")
 	}
 
 	return strings.Join(parts, " ")
@@ -311,8 +329,8 @@ func run(pass *analysis.Pass) (any, error) {
 	dir := pass.ResultOf[directive.Analyzer].(*directive.Result)
 
 	res := &Result{
-		pass: pass, dir: dir, local: make(map[*types.Func]Fact), imported: make(map[*types.Func]Fact),
-		ownedImported: make(map[*types.TypeName]bool),
+		pass: pass, dir: dir, local: make(map[*types.Func]Fact), syncs: make(map[*types.Func]bool),
+		imported: make(map[*types.Func]Fact), ownedImported: make(map[*types.TypeName]bool),
 	}
 
 	for _, c := range dir.Contracts {
@@ -326,6 +344,8 @@ func run(pass *analysis.Pass) (any, error) {
 			callers[c.Origin()] = append(callers[c.Origin()], f)
 		}
 	}
+
+	res.synchronize(pre.Funcs, callers)
 
 	// Summarise to a fixpoint: a function that starts invalidating a parameter, returning a view,
 	// or ending one can make its callers in this package do the same. Every part only grows: a
@@ -360,6 +380,14 @@ func run(pass *analysis.Pass) (any, error) {
 				queued[caller] = true
 				work = append(work, caller)
 			}
+		}
+	}
+
+	for fn := range res.syncs {
+		if fn.Exported() {
+			fact := res.local[fn]
+			fact.Syncs = true
+			res.local[fn] = fact
 		}
 	}
 
@@ -488,7 +516,7 @@ func trimEvents(events []effect.Event) []effect.Event {
 
 func equal(a, b Fact) bool {
 	return a.Invalidates == b.Invalidates && a.View == b.View && slices.Equal(a.Events, b.Events) &&
-		a.Consumes == b.Consumes
+		a.Consumes == b.Consumes && a.Syncs == b.Syncs
 }
 
 // knownViewEffect reports whether package effect knows fn's views and events, which then take

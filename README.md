@@ -19,6 +19,7 @@ collector. It runs as a `go vet` tool, with zero runtime cost and no language ch
 | **MS102** | A string used after a write into the bytes it shares with a `[]byte` through `unsafe.String` or `unsafe.Slice` |
 | **MS103** | A `reflect.SliceHeader` or `reflect.StringHeader` value used as memory |
 | **MS104** | An `unsafe` operation without a `// SAFETY:` comment (opt-in: `-unsafeflow.safety`) |
+| **MS401** | A variable a goroutine captures, written on one side and accessed on the other with no synchronisation between them, such as `go func() { err = f() }()` followed by `if err != nil`, including synchronisation through helper functions in other packages |
 | **MS501** | A value used after its ownership moved: an `//memsafe:owned` value sent on a channel or stored into another owner, or a value passed to a `//memsafe:consumes` parameter |
 
 Every check, with its exact rules and its limits, is defined in the

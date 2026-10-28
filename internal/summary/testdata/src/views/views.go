@@ -75,8 +75,9 @@ func Merged(c bool, buf *bytes.Buffer) []byte { // want Merged:`^viewof\(1: 0x2\
 	return buf.AvailableBuffer()
 }
 
-// Line returns the view bufio.Reader.ReadSlice makes, and is itself a read on r.
-func Line(r *bufio.Reader) ([]byte, error) { return r.ReadSlice('\n') } // want Line:`^viewof\(0: 0x1\) ends\(0: 0x1\)$`
+// Line returns the view bufio.Reader.ReadSlice makes, and is itself a read on r. It may
+// synchronise: ReadSlice reads from the io.Reader r wraps.
+func Line(r *bufio.Reader) ([]byte, error) { return r.ReadSlice('\n') } // want Line:`^viewof\(0: 0x1\) ends\(0: 0x1\) syncs$`
 
 // EitherBuffer returns a view into one of two buffers, so it is no view of either.
 func EitherBuffer(c bool, a, b *bytes.Buffer) []byte {
@@ -106,8 +107,9 @@ func MaybeClear(c bool, buf *bytes.Buffer) {
 // Fill writes into its second argument.
 func Fill(_ int, buf *bytes.Buffer) { buf.WriteByte('x') } // want Fill:`^ends\(1: 0x2\)$`
 
-// Emit writes into a bufio.Writer.
-func Emit(w *bufio.Writer, s string) { _, _ = w.WriteString(s) } // want Emit:`^ends\(0: 0x2\)$`
+// Emit writes into a bufio.Writer. It may synchronise: a full buffer is flushed to the
+// io.Writer w wraps.
+func Emit(w *bufio.Writer, s string) { _, _ = w.WriteString(s) } // want Emit:`^ends\(0: 0x2\) syncs$`
 
 // Renew replaces the buffer before clearing it: the caller's views keep the old one.
 func Renew(buf *bytes.Buffer) {

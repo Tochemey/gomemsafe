@@ -81,12 +81,37 @@ var paramReporter = &analysis.Analyzer{
 	},
 }
 
+// chanReporter reports, at each function declaration, whether it communicates on a channel and
+// whether it calls an interface method or a function value.
+var chanReporter = &analysis.Analyzer{
+	Name:     "prefilterchans",
+	Doc:      "reports the prefilter's channel communication and dynamic calls for tests",
+	Requires: []*analysis.Analyzer{prefilter.Analyzer},
+	Run: func(pass *analysis.Pass) (any, error) {
+		for _, f := range pass.ResultOf[prefilter.Analyzer].(*prefilter.Result).Funcs {
+			if f.Communicates {
+				pass.Reportf(f.Decl.Pos(), "communicates")
+			}
+
+			if f.CallsDynamic {
+				pass.Reportf(f.Decl.Pos(), "calls dynamic")
+			}
+		}
+
+		return nil, nil
+	},
+}
+
 func TestRecordsStaticCalleesPerFunction(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), reporter, "p")
 }
 
 func TestRecordsCalleesPassedAParameter(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), paramReporter, "params")
+}
+
+func TestRecordsChannelsAndDynamicCalls(t *testing.T) {
+	analysistest.Run(t, analysistest.TestData(), chanReporter, "chans")
 }
 
 func calleeName(fn *types.Func) string {
