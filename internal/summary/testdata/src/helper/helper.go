@@ -33,8 +33,8 @@ var pool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 // Owner releases buffers through a method.
 type Owner struct{}
 
-// Get returns a buffer from the pool.
-func Get() *bytes.Buffer { return pool.Get().(*bytes.Buffer) }
+// Get returns a buffer from the pool, which synchronises with the Put that returned it.
+func Get() *bytes.Buffer { return pool.Get().(*bytes.Buffer) } // want Get:`^syncs$`
 
 // Release returns b to the pool on every path, and clears it first, which ends its views.
 func Release(b *bytes.Buffer) { // want Release:`^invalidates\(0x1\) ends\(0: 0x4\)$`
@@ -61,7 +61,7 @@ type Pooled struct{ bytes.Buffer }
 var pooled = sync.Pool{New: func() any { return new(Pooled) }}
 
 // GetPooled returns a Pooled from its pool.
-func GetPooled() *Pooled { return pooled.Get().(*Pooled) }
+func GetPooled() *Pooled { return pooled.Get().(*Pooled) } // want GetPooled:`^syncs$`
 
 // Release returns the receiver itself to the pool: argument 0.
 func (p *Pooled) Release() { pooled.Put(p) } // want Release:`^invalidates\(0x1\)$`

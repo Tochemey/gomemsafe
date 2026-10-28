@@ -41,7 +41,7 @@ func TestAllIsAValidAnalyzerSet(t *testing.T) {
 		names[a.Name] = true
 	}
 
-	for _, want := range []string{"directive", "unsafeflow", "lifetime"} {
+	for _, want := range []string{"directive", "unsafeflow", "lifetime", "sharing", "ownership"} {
 		if !names[want] {
 			t.Errorf("All() lacks %q", want)
 		}

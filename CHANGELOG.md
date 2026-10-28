@@ -11,6 +11,7 @@
 - MS102 reports a string used after a write into the bytes it shares with a `[]byte` through `unsafe.String` or `unsafe.Slice`.
 - MS103 reports a `reflect.SliceHeader` or `reflect.StringHeader` value used as memory.
 - MS104 reports an `unsafe` operation without a `// SAFETY:` comment, enabled with `-unsafeflow.safety`.
+- MS401 reports a variable a goroutine captures, written on one side and accessed on the other with no synchronisation between them, following synchronisation through helper functions in other packages.
 - MS501 reports a value used after its ownership moved: an `//memsafe:owned` value sent on a channel or stored into another owner, or a value passed to a `//memsafe:consumes` parameter, in any package.
 - MS000 reports a `//memsafe:` directive that is malformed or not supported.
 - Findings name and point at the value used, including in assignments, composite literals, conversions, returns, channel sends, `select` cases, `range` loops, and `go` and `defer` calls.

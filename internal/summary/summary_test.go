@@ -196,6 +196,8 @@ func TestFactString(t *testing.T) {
 		{summary.Fact{View: effect.View{Arg: 1, EndedBy: effect.Write}}, "viewof(1: 0x2)"},
 		{summary.Fact{Events: []effect.Event{effect.Clear, 0, effect.All}}, "ends(0: 0x4, 2: 0xf)"},
 		{summary.Fact{Consumes: 0b10}, "consumes(0x2)"},
+		{summary.Fact{Syncs: true}, "syncs"},
+		{summary.Fact{Consumes: 0b1, Syncs: true}, "consumes(0x1) syncs"},
 		{
 			summary.Fact{Invalidates: 1, View: effect.View{EndedBy: effect.Read}, Events: []effect.Event{effect.Read}},
 			"invalidates(0x1) viewof(0: 0x1) ends(0: 0x1)",

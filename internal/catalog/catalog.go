@@ -56,6 +56,9 @@ const (
 	// UseOfInvalidatedView is a use of a view, such as the slice from bytes.Buffer.Bytes, after
 	// a call on its owner ended it.
 	UseOfInvalidatedView ID = "MS302"
+	// UnsynchronizedCapture is a variable captured by a goroutine, written on one side and
+	// accessed on the other with no synchronisation between the two.
+	UnsynchronizedCapture ID = "MS401"
 	// UseAfterMove is a use of a value after its ownership moved: an owned value sent on a
 	// channel or stored into another owner, or any value passed to a consuming parameter.
 	UseAfterMove ID = "MS501"
@@ -67,7 +70,6 @@ const (
 	UseAfterCFree         ID = "MS202"
 	CAllocationLeak       ID = "MS203"
 	EscapingBorrowedView  ID = "MS303"
-	UnsynchronizedCapture ID = "MS401"
 	ConcurrentMapAccess   ID = "MS402"
 	UnguardedField        ID = "MS403"
 	EscapingBorrow        ID = "MS502"

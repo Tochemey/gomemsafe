@@ -136,7 +136,7 @@ Dependencies are the standard library plus `golang.org/x/tools`
 | `internal/directive` | Parses `//memsafe:` directives and checklocks annotations (`+checklocks…`, `+checkatomic`) once per package. Other analyzers consume the result through `Requires`. Malformed directives are reported as diagnostics, never silently ignored. |
 | `internal/prefilter` | A single `inspector` pass that records *trigger sites*: `unsafe` and `"C"` imports, `go` statements, channel sends of pointer-containing types, uses of objects with a known effect (`sync.Pool`, `bytes.Buffer.Bytes`, …), annotated objects, and calls to functions that have non-empty summary facts. Functions with no trigger sites are never lowered to SSA dataflow. |
 | `internal/summary` | **The only analyzer that exports facts** ([D2](decisions.md)). Computes a compact effect summary for each function and method (see §4.2). |
-| `internal/effect` | The known effects of library calls whose lifetime semantics cannot be derived from their code (`sync.Pool.Put` invalidates its argument; `Scanner.Scan` invalidates the previous `Bytes()`). A known effect takes precedence over a computed summary. |
+| `internal/effect` | The known effects of library calls whose semantics cannot be derived from their code (`sync.Pool.Put` invalidates its argument; `Scanner.Scan` invalidates the previous `Bytes()`; `WaitGroup.Wait` completes a happens-before edge, and `Mutex.Unlock` does not). A known effect takes precedence over a computed summary. |
 | `internal/lazyssa` | Builds a package's SSA once, on first request, and shares it between `summary` and the checks. It replaces `buildssa`, which always builds and pulls in `ctrlflow` (§7.2 item 5). |
 | `internal/flow` | A shared dataflow engine: sparse tracked values, bitset lattices, a worklist in reverse postorder, and per-function budgets (§7.3). |
 | `internal/check/*` | One analyzer per check family. Each is thin: it defines *sources* (what creates a tracked value), *transfer* rules (what invalidates, moves, or escapes it), and *sinks* (what counts as a violating use). |
@@ -169,8 +169,9 @@ Each parameter (including the receiver) gets a small bitset:
 | `ShareGoroutine` | May be made reachable from another goroutine | requires `Send` |
 
 Results carry a `BorrowOf(p)` bit: the result is a view into parameter `p` and stays valid
-only until `p` is invalidated (`Buffer.Bytes`). Lock effects (`Acquires`, `Releases`,
-`Requires(mu)`) feed MS403.
+only until `p` is invalidated (`Buffer.Bytes`). The function as a whole carries a `Syncs` bit:
+a call of it may synchronise with another goroutine (MS401). Lock effects (`Acquires`,
+`Releases`, `Requires(mu)`) feed MS403.
 
 When the callee cannot be resolved (an interface method, a function value, reflection), the
 caller uses a **conservative default**: `Retains | Mutates`, without `Consumes` or
@@ -213,7 +214,7 @@ applies, so the command line never mentions tiers.
 | MS301 | Use of a value after `sync.Pool.Put` | `pool.Put(buf); buf.WriteString("x")` |
 | MS302 | Use of a borrowed view after its owner is invalidated. The views and the calls that end them come from the standard library's documentation: `bytes.Buffer` (`Bytes`, `Next`, `Peek`, `AvailableBuffer`), `bufio.Scanner.Bytes`, `bufio.Reader` (`Peek`, `ReadSlice`, `ReadLine`), and `bufio.Writer.AvailableBuffer`. A call the documentation does not name does not end a view: `bufio.Reader.Peek` after `Peek`, `bytes.Buffer.Grow`, and `Reset` or `Truncate` after any view but `Bytes`. Other types declare their views with `//memsafe:viewof` and the calls that end them with `//memsafe:invalidates` (§6): a declared view is ended by any call that ends its owner's views, and a declared invalidation ends every view of its argument. A helper that returns a view of one of its parameters on every path, or ends a parameter's views on every path, is followed in its callers in any package through its summary. A helper's view of a field of a parameter, or its call on such a field, is not, because ending the views of one field leaves those of the others valid. The owner must be the same buffer at both calls: a local variable, a parameter, a global, or a field such a value holds by value, such as `c.buf` or an embedded buffer. A buffer behind a pointer field, or captured by a function literal, is loaded at each call and could be reassigned between them, so it is not followed; neither is an owner the function replaces after a view of it was made, such as `buf = bytes.Buffer{}` or `*c = conn{}`, since the view keeps the old buffer. A view carried round one loop is followed when its owner is defined before the loop; one kept across nested loops is missed. `len` and `cap` are no use. | `b := buf.Bytes(); buf.Reset(); use(b)` / `x := sc.Bytes(); sc.Scan(); use(x)` |
 | MS303 | A borrowed view escapes (to a field, a global, a channel, or a goroutine) while its owner is later reused | `results = append(results, sc.Bytes())` inside a scan loop |
-| MS401 | A variable captured by a goroutine, written on one side and accessed on the other, with no happens-before edge the analyser can recognise (`WaitGroup.Wait`, channel receive, `Mutex`, `errgroup.Wait`) | `go func(){ err = f() }(); if err != nil {…}` |
+| MS401 | A variable that a goroutine's function literal captures, written on one side and read or written on the other, with nothing between the two accesses that may order them. The sides are the goroutine and the function that starts it, after the `go` statement. A pair is reported when some path from the `go` statement reaches the starting function's access without synchronising, and some path from the goroutine's start reaches its access without synchronising. Synchronising is a channel send or receive, a `select`, a call the Go memory model documents as completing a happens-before edge (`WaitGroup.Wait`, `Mutex.Lock`, `RWMutex.Lock` and `RLock`, their `TryLock` forms, `Cond.Wait`, `Once.Do`, `sync.Map`'s read operations, `sync.Pool.Get`, and every `sync/atomic` operation), a call whose summary may synchronise in any package, such as `errgroup.Group.Wait`, a call of an interface method or a function value, and a function's deferred calls where it returns. A release, such as `Mutex.Unlock` or `WaitGroup.Done`, is not. Releases are not paired with acquires, so synchronising on either side keeps a pair silent. An access is a load or a store of the variable or of a field of a struct variable, so `s.a` and `s.b` are told apart; a variable a loop body declares is a new one each iteration. The variable's address passed on, a write through a pointer it holds, a variable captured only by a function literal nested in the goroutine, `go f(&x)`, and two goroutines racing with each other are not followed. | `go func(){ err = f() }(); if err != nil {…}` |
 | MS402 | A map written in a goroutine and accessed concurrently without synchronisation | — |
 
 ### Tier 1 + annotations — Sync
@@ -407,8 +408,9 @@ These are stated plainly so that users know what a clean run does *not* prove.
 - Outside annotated scope, the analysis is unsound by design. It can miss hazards that flow
   through interfaces, function values, reflection, package-level globals mutated from several
   packages, or assembly.
-- Happens-before reasoning is intra-procedural plus summaries. Synchronisation through custom
-  primitives is not recognised unless annotated.
+- Happens-before reasoning is intra-procedural plus summaries, and a release is never paired
+  with its acquire: any synchronisation on either side of a goroutine capture keeps MS401
+  silent, so a race that merely sits next to a lock or a channel operation is missed.
 - Generic functions are summarised once over their generic body, with type parameters treated
   conservatively.
 - MS301 tracks only values that share memory with the callee: pointers, slices (reslices

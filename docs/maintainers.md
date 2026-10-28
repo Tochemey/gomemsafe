@@ -21,12 +21,16 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
                       ├─ lazyssa      SSA for the package, built only if asked
                       ├─ summary      per-function facts → .vetx (all packages): the arguments
                       │               taken back, the view returned, the views ended, the
-                      │               arguments consumed; owned types
+                      │               arguments consumed, whether a call may synchronise;
+                      │               owned types
                       └─ checks       lifetime (MS301, MS302), skipped in facts-only runs;
                                       unsafeflow (MS101, MS102, MS103; MS104 with -unsafeflow.safety), not run in facts-only runs;
+                                      sharing (MS401), skipped in facts-only runs;
                                       ownership (MS501), skipped in facts-only runs
                            └─ lifetime: invalidation + flow, must-dataflow on SSA
                            └─ unsafeflow: syntax, and for MS102 flow on SSA
+                           └─ sharing: flow on SSA, one fact per goroutine and captured
+                                variable, and a must-synchronised flow over each goroutine
                            └─ ownership: flow on SSA, maybe-moved, with edge effects for select
                            └─ locate: points diagnostics at the value used
                            └─ report: emits diagnostics, honouring //memsafe:allow
@@ -42,19 +46,20 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `internal/catalog` | The stable check IDs (`MS301`, …), implemented and planned | none |
 | `internal/check/lifetime` | MS301, use after invalidation; MS302, a view used after its owner ended it | engine packages, locate, report |
 | `internal/check/ownership` | MS501, a value used after its ownership moved | catalog, directive, flow, invalidation, lazyssa, locate, prefilter, report, summary, trace, vetmode |
+| `internal/check/sharing` | MS401, a variable a goroutine captures, accessed on both sides with no synchronisation between them | catalog, directive, flow, lazyssa, prefilter, report, summary, trace, vetmode |
 | `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it; MS102, a string used after a write into the bytes it shares; MS103, a reflect header value used as memory; MS104 (opt-in), an unsafe operation without a `// SAFETY:` comment | catalog, directive, flow, lazyssa, locate, prefilter, report, trace |
 | `internal/cmd/bench` | Development command: the benchmark harness (design §7.1) | frontend, trace |
 | `internal/cmd/rsswrap` | Development command: `-toolexec` wrapper recording each compile's peak RSS | trace |
 | `internal/directive` | `//memsafe:` parsing: suppressions, function contracts (`viewof`, `invalidates`, `consumes`), owned types; MS000 | catalog, effect, vetmode |
 | `internal/flow` | Must-dataflow engine over SSA, with optional effects on edges | none |
 | `internal/frontend` | Runs vet, decodes its JSON (`Decode`), renders, exit codes, `-stats` | trace |
-| `internal/effect` | Known effects of library calls: invalidations (`sync.Pool.Put`), and the standard library's views and the events that end them | none |
+| `internal/effect` | Known effects of library calls: invalidations (`sync.Pool.Put`), the standard library's views and the events that end them, and the calls of `sync` and `sync/atomic` that synchronise | none |
 | `internal/invalidation` | Tracks invalidated values, and views that were ended, through one function; the view a function returns and the events it is on its parameters, for summaries | effect, flow |
 | `internal/lazyssa` | Builds SSA on demand, once | trace |
 | `internal/locate` | Maps SSA instructions back to the source expressions of the values they use | none |
-| `internal/prefilter` | Static callees per function, and those passed a parameter; calls by position | none |
+| `internal/prefilter` | Static callees per function, and those passed a parameter; whether a function calls an interface method or a function value, and whether it communicates on a channel; calls by position | none |
 | `internal/report` | The one way checks emit diagnostics | directive |
-| `internal/summary` | Facts of what each function does to its arguments (taken back, viewed, views ended, consumed) and of owned types, the only fact producer | directive, effect, flow, invalidation, lazyssa, prefilter |
+| `internal/summary` | Facts of what each function does to its arguments (taken back, viewed, views ended, consumed), of whether a call of it may synchronise, and of owned types, the only fact producer | directive, effect, flow, invalidation, lazyssa, prefilter |
 | `internal/trace` | `GOMEMSAFE_TRACE` timing events | vetmode |
 | `internal/vetmode` | Vet-tool invocation and facts-only detection | none |
 
@@ -66,8 +71,8 @@ The engine packages (`directive`, `prefilter`, `lazyssa`, `flow`, `invalidation`
 
 ### Teach gomemsafe about another invalidating function
 
-There are two kinds of effect, both in `internal/effect/effect.go`, keyed by the callee's full
-name as `types.Func.FullName` prints it, declared as a constant.
+There are three kinds of effect, in `internal/effect`, keyed by the callee's full name as
+`types.Func.FullName` prints it, declared as a constant.
 
 - **An invalidation** takes an argument back, like `sync.Pool.Put`: add an `Invalidation` entry
   to `known`. Argument indexes count the receiver as 0. Functions that only *call* such a
@@ -79,13 +84,20 @@ name as `types.Func.FullName` prints it, declared as a constant.
   return such a view of a parameter, or call such an event on one, need nothing: `summary`
   derives their facts too. Code outside the standard library declares its own views with
   `//memsafe:viewof` and `//memsafe:invalidates` instead.
+- **A synchronising call** completes a happens-before edge in its caller, like
+  `sync.WaitGroup.Wait`: add it to `synchronizing` in `internal/effect/sync.go`, quoting the
+  memory-model sentence of its documentation. Only packages `sync` and `sync/atomic` are listed
+  there, because their code synchronises in calls that complete no edge, such as `Mutex.Unlock`;
+  every other function's synchronisation is derived by `summary`.
 
 Then:
 
 1. Test the entry in `internal/effect/effect_test.go`, with `effect.Of`, `effect.ViewOf`, or
-   `effect.EventsOf`.
+   `effect.EventsOf`, or a synchronising call in `internal/effect/sync_test.go`, with
+   `effect.Synchronizes`.
 2. Add positive cases and look-alike negative cases to the fixtures under
-   `internal/check/lifetime/testdata/src`.
+   `internal/check/lifetime/testdata/src`, or `internal/check/sharing/testdata/src` for a
+   synchronising call.
 
 ### Add a check
 

@@ -22,7 +22,9 @@
 
 // Package prefilter makes one cheap pass over a package's syntax and records which static
 // callees each function declaration calls, including calls inside its function literals, and
-// which of them it passes one of its own parameters. It also indexes every call by the position
+// which of them it passes one of its own parameters, whether it calls an interface method or a
+// function value, and whether it communicates on a channel.
+// It also indexes every call by the position
 // of its opening parenthesis, which is the position SSA gives call instructions, so checks can
 // map an SSA call back to its source.
 //
@@ -72,6 +74,12 @@ type Func struct {
 	// parameter's own type. Only a parameter written as itself counts, not a field of it, and
 	// not one that a method promoted from an embedded field or an implicit address takes.
 	ParamCallees []*types.Func
+	// CallsDynamic reports whether the body calls an interface method or a function value, whose
+	// callee is not known statically.
+	CallsDynamic bool
+	// Communicates reports whether the body sends on or receives from a channel, in a select
+	// or not, including a range over a channel.
+	Communicates bool
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -84,7 +92,11 @@ func run(pass *analysis.Pass) (any, error) {
 	seenWithParam := make(map[*types.Func]bool)
 	params := make(map[types.Object]bool)
 
-	insp.Preorder([]ast.Node{(*ast.FuncDecl)(nil), (*ast.CallExpr)(nil)}, func(n ast.Node) {
+	nodes := []ast.Node{
+		(*ast.FuncDecl)(nil), (*ast.CallExpr)(nil), (*ast.SendStmt)(nil), (*ast.UnaryExpr)(nil), (*ast.RangeStmt)(nil),
+	}
+
+	insp.Preorder(nodes, func(n ast.Node) {
 		switch n := n.(type) {
 		case *ast.FuncDecl:
 			current = nil
@@ -109,6 +121,7 @@ func run(pass *analysis.Pass) (any, error) {
 
 			callee := typeutil.StaticCallee(pass.TypesInfo, n)
 			if callee == nil {
+				current.CallsDynamic = current.CallsDynamic || isDynamic(pass, n)
 				return
 			}
 
@@ -121,10 +134,39 @@ func run(pass *analysis.Pass) (any, error) {
 				seenWithParam[callee] = true
 				current.ParamCallees = append(current.ParamCallees, callee)
 			}
+		default:
+			if current != nil && !current.Communicates && n.Pos() >= current.Decl.Pos() && n.End() <= current.Decl.End() {
+				current.Communicates = communicates(pass, n)
+			}
 		}
 	})
 
 	return res, nil
+}
+
+// communicates reports whether n, a send, a unary expression, or a range statement, is a channel
+// operation.
+func communicates(pass *analysis.Pass, n ast.Node) bool {
+	switch n := n.(type) {
+	case *ast.UnaryExpr:
+		return n.Op == token.ARROW
+	case *ast.RangeStmt:
+		_, isChan := pass.TypesInfo.TypeOf(n.X).Underlying().(*types.Chan)
+		return isChan
+	}
+
+	return true
+}
+
+// isDynamic reports whether call, which has no static callee, calls an interface method or a
+// function value, rather than a builtin, a conversion, or a function literal.
+func isDynamic(pass *analysis.Pass, call *ast.CallExpr) bool {
+	switch typeutil.Callee(pass.TypesInfo, call).(type) {
+	case *types.Func, *types.Var:
+		return true
+	}
+
+	return false
 }
 
 // collectParams adds the receiver and parameters of decl to params.
