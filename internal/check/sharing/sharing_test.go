@@ -56,7 +56,17 @@ func TestSkipsFactsOnlyRuns(t *testing.T) {
 	vetmode.Set(true)
 	t.Cleanup(func() { vetmode.Set(false) })
 
-	analysistest.Run(t, analysistest.TestData(), Analyzer, "skipped")
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "unreported")
+}
+
+// TestReportsNothingOverBudget covers a race in a function whose dataflow exceeds the budget:
+// the result is unknown, so the check fails quiet instead of reporting.
+func TestReportsNothingOverBudget(t *testing.T) {
+	budget = 1
+
+	t.Cleanup(func() { budget = 0 })
+
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "unreported")
 }
 
 func TestBuildsNoSSAWithoutGoroutines(t *testing.T) {

@@ -79,6 +79,10 @@ const (
 		"a channel receive, or guard %s with a mutex on both sides"
 )
 
+// budget is the dataflow budget per function; zero means flow.DefaultBudget. Tests lower it to
+// see what a function over budget does: it reports nothing.
+var budget int
+
 // Analyzer is the sharing check.
 var Analyzer = &analysis.Analyzer{
 	Name: "sharing",
@@ -120,7 +124,11 @@ func run(pass *analysis.Pass) (any, error) {
 	}
 
 	ssaRes := pass.ResultOf[lazyssa.Analyzer].(*lazyssa.Result)
-	c := &checker{pass: pass, sync: newSyncer(pass.ResultOf[summary.Analyzer].(*summary.Result).Syncs)}
+	c := &checker{
+		pass: pass,
+		sync: newSyncer(pass.ResultOf[summary.Analyzer].(*summary.Result).Syncs),
+		eng:  flow.Engine{Budget: budget},
+	}
 
 	for _, f := range funcs {
 		if fn := ssaRes.Func(f.Obj); fn != nil {

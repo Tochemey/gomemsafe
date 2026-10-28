@@ -85,6 +85,34 @@ func body(wg *sync.WaitGroup) {
 	_ = n
 }
 
+func phiOnePath(c bool, wg *sync.WaitGroup) {
+	n := 0
+	go func() {
+		v := 0
+		if c {
+			wg.Wait()
+			v = 1
+		}
+		n = v
+	}()
+	_ = n
+}
+
+func phiBothPaths(c bool, wg *sync.WaitGroup) {
+	n := 0
+	go func() {
+		v := 0
+		if c {
+			wg.Wait()
+			v = 1
+		} else {
+			wg.Wait()
+		}
+		n = v
+	}()
+	_ = n
+}
+
 func noAccess() {
 	n := 0
 	go func() { _ = &n }()
@@ -188,6 +216,35 @@ func TestUnsynchronizedKeepsAccessesBeforeSynchronising(t *testing.T) {
 
 	if racing := newSyncer(stubSyncs).unsynchronized(pkg.Func("noAccess").AnonFuncs[0], &eng); len(racing) != 1 || len(racing[0]) != 0 {
 		t.Fatalf("racing without an access = %+v, want none", racing)
+	}
+}
+
+// TestUnsynchronizedMeetsPathsAtPhis covers goroutines whose paths merge at a phi before they
+// write n: synchronising on one path leaves the write racing, on both paths it does not.
+func TestUnsynchronizedMeetsPathsAtPhis(t *testing.T) {
+	pkg := buildSSA(t, syncsSrc)
+
+	for name, want := range map[string]int{"phiOnePath": 1, "phiBothPaths": 0} {
+		var eng flow.Engine
+
+		body := pkg.Func(name).AnonFuncs[0]
+		if len(instrsOf[*ssa.Phi](body)) == 0 {
+			t.Fatalf("%s: the goroutine has no phi", name)
+		}
+
+		racing := newSyncer(stubSyncs).unsynchronized(body, &eng)
+
+		writes := 0
+
+		for i, fv := range body.FreeVars {
+			if fv.Name() == "n" {
+				writes = len(racing[i])
+			}
+		}
+
+		if writes != want {
+			t.Errorf("%s: %d racing writes of n, want %d", name, writes, want)
+		}
 	}
 }
 

@@ -20,9 +20,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package skipped has a race but no want comment: MS401 analyses it only in a facts-only run,
-// where it must report nothing.
-package skipped
+// Package unreported has a race but no want comment: MS401 analyses it only where it must
+// report nothing, in a facts-only run and over its dataflow budget.
+package unreported
 
 func work() error { return nil }
 
