@@ -25,7 +25,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
                       │               owned types
                       └─ checks       lifetime (MS301, MS302), skipped in facts-only runs;
                                       unsafeflow (MS101, MS102, MS103; MS104 with -unsafeflow.safety), not run in facts-only runs;
-                                      sharing (MS401), skipped in facts-only runs;
+                                      sharing (MS401, MS402), skipped in facts-only runs;
                                       ownership (MS501), skipped in facts-only runs
                            └─ lifetime: invalidation + flow, must-dataflow on SSA
                            └─ unsafeflow: syntax, and for MS102 flow on SSA
@@ -46,7 +46,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `internal/catalog` | The stable check IDs (`MS301`, …), implemented and planned | none |
 | `internal/check/lifetime` | MS301, use after invalidation; MS302, a view used after its owner ended it | engine packages, locate, report |
 | `internal/check/ownership` | MS501, a value used after its ownership moved | catalog, directive, flow, invalidation, lazyssa, locate, prefilter, report, summary, trace, vetmode |
-| `internal/check/sharing` | MS401, a variable a goroutine captures, accessed on both sides with no synchronisation between them | catalog, directive, flow, lazyssa, prefilter, report, summary, trace, vetmode |
+| `internal/check/sharing` | MS401, a variable a goroutine captures, accessed on both sides with no synchronisation between them; MS402, the same race on the map such a variable holds | catalog, directive, flow, lazyssa, prefilter, report, summary, trace, vetmode |
 | `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it; MS102, a string used after a write into the bytes it shares; MS103, a reflect header value used as memory; MS104 (opt-in), an unsafe operation without a `// SAFETY:` comment | catalog, directive, flow, lazyssa, locate, prefilter, report, trace |
 | `internal/cmd/bench` | Development command: the benchmark harness (design §7.1) | frontend, trace |
 | `internal/cmd/rsswrap` | Development command: `-toolexec` wrapper recording each compile's peak RSS | trace |

@@ -44,6 +44,22 @@ func TestReportsUnsynchronizedCaptures(t *testing.T) {
 	}
 }
 
+func TestReportsUnsynchronizedMapAccesses(t *testing.T) {
+	results := analysistest.Run(t, analysistest.TestData(), Analyzer, "mapraced")
+	for _, r := range results {
+		for _, d := range r.Diagnostics {
+			if d.Category != MapID.String() || len(d.Related) != 2 || len(d.SuggestedFixes) != 1 {
+				t.Errorf("%q: category %q, %d related, %d fixes; want %s, 2, and 1",
+					d.Message, d.Category, len(d.Related), len(d.SuggestedFixes), MapID)
+			}
+		}
+	}
+}
+
+func TestStaysSilentOnSynchronizedMapAccesses(t *testing.T) {
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "mapracedfalsepos")
+}
+
 func TestStaysSilentOnSynchronizedCaptures(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), Analyzer, "racedfalsepos")
 }
