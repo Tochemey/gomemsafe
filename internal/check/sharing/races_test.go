@@ -60,6 +60,28 @@ func starts(f func()) {
 	_ = x
 }
 
+func mapOps(c bool) {
+	m := map[string]int{}
+	m["a"] = 1
+	_ = m["a"]
+	delete(m, "a")
+	clear(m)
+	_ = len(m)
+	for range m {
+	}
+	println(m)
+	var boxed any = m
+	_ = boxed
+	old := m
+	m = nil
+	old["b"] = 2
+	later := m
+	if c {
+		later["c"] = 3
+	}
+	go func() { _ = m }()
+}
+
 func fromLiteral() {
 	x := 0
 	func() {
@@ -98,6 +120,50 @@ func TestAccessesOfFollowsFields(t *testing.T) {
 
 		if !found {
 			t.Errorf("no access with path %v and write %v in %+v", w.path, w.write, got)
+		}
+	}
+}
+
+// TestAccessesOfFollowsMapOperations covers every operation on a map that a load of the variable
+// yields, writes and reads; uses of the map that are no operation on it, a builtin that only
+// prints it and a conversion to an interface; and two operations that do not count: one after a
+// store of the variable between it and its load, and one in another block than its load.
+func TestAccessesOfFollowsMapOperations(t *testing.T) {
+	fn := buildSSA(t, racesSrc).Func("mapOps")
+
+	var writes, reads int
+
+	for _, a := range accessesOf(instrOf[*ssa.Alloc](t, fn)) {
+		switch {
+		case a.inMap && a.write:
+			writes++
+		case a.inMap:
+			reads++
+		}
+	}
+
+	// Writes: the assignment, delete, and clear. Reads: the index, len, and range.
+	if writes != 3 || reads != 3 {
+		t.Fatalf("%d map writes and %d map reads, want 3 and 3", writes, reads)
+	}
+}
+
+func TestReplacesNeedsAStoreOfWhatHoldsTheMap(t *testing.T) {
+	op := access{path: []int{1}, inMap: true}
+
+	for _, tc := range []struct {
+		store access
+		want  bool
+	}{
+		{access{write: true}, true},
+		{access{path: []int{1}, write: true}, true},
+		{access{path: []int{1, 0}, write: true}, false},
+		{access{path: []int{0}, write: true}, false},
+		{access{}, false},
+		{access{write: true, inMap: true}, false},
+	} {
+		if got := replaces(tc.store, op); got != tc.want {
+			t.Errorf("replaces(%+v, %+v) = %v, want %v", tc.store, op, got, tc.want)
 		}
 	}
 }

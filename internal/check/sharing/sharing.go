@@ -21,7 +21,7 @@
 // SOFTWARE.
 
 // Package sharing is the family of Tier 1 checks on variables shared between goroutines, MS401
-// and MS402. MS401 is implemented.
+// and MS402.
 //
 // MS401 is a variable that a goroutine's function literal captures, written on one side and read
 // or written on the other, with nothing between the two accesses that may order them. The two
@@ -44,6 +44,15 @@
 // follow the variable's address passed on, a write through a pointer the variable holds, a
 // variable captured only by a function literal nested in the goroutine, a goroutine started as
 // go f(&x), or two goroutines racing with each other.
+//
+// MS402 is the same race on the map a captured variable holds, which the runtime may end with a
+// fatal error: an assignment into it, delete, or clear on one side, and any of those, an index,
+// range, or len on the other. An operation counts where it follows a load of the variable in the
+// same block, with no store of the variable between them, since after one the variable may hold
+// another map. For the same reason, a store of the variable in the starting function after the
+// go statement makes its later operations safe, and the goroutine's operations after its own
+// unsynchronised store are dropped. Each such store races with the other side's accesses to the
+// variable itself, which MS401 reports, so a race is reported once.
 package sharing
 
 import (
@@ -66,17 +75,26 @@ import (
 	"github.com/tochemey/gomemsafe/internal/vetmode"
 )
 
-// CaptureID is the check ID of a variable a goroutine captures and accesses with no
-// synchronisation.
-const CaptureID = catalog.UnsynchronizedCapture
+// Check IDs of the sharing family.
+const (
+	// CaptureID is the check ID of a variable a goroutine captures and accesses with no
+	// synchronisation.
+	CaptureID = catalog.UnsynchronizedCapture
+	// MapID is the check ID of a map a goroutine captures and operates on with no
+	// synchronisation.
+	MapID = catalog.ConcurrentMapAccess
+)
 
-// Diagnostic texts of MS401. The variable's name is the first %s after the ID.
+// Diagnostic texts of MS401 and MS402. What is accessed, the variable or the map it holds, is the
+// first %s after the ID.
 const (
 	msgRace          = "%s: %s %s here while a goroutine %s it, with no synchronisation between them"
 	msgGoroutineSide = "%s %s in the goroutine here"
 	msgStarted       = "goroutine started here"
 	helpRace         = "wait for the goroutine before this access, for example with sync.WaitGroup.Wait or " +
 		"a channel receive, or guard %s with a mutex on both sides"
+	helpMapRace = "a concurrent map access is a fatal runtime error: " + helpRace
+	mapPrefix   = "map "
 )
 
 // budget is the dataflow budget per function; zero means flow.DefaultBudget. Tests lower it to
@@ -87,7 +105,8 @@ var budget int
 var Analyzer = &analysis.Analyzer{
 	Name: "sharing",
 	Doc: "reports variables a goroutine captures that are written on one side and accessed on the " +
-		"other with no synchronisation between them (MS401)",
+		"other with no synchronisation between them (MS401), and maps so captured that are written " +
+		"on one side and operated on on the other (MS402)",
 	Requires: []*analysis.Analyzer{
 		directive.Analyzer, prefilter.Analyzer, lazyssa.Analyzer, summary.Analyzer,
 	},
@@ -194,22 +213,28 @@ func (c *checker) reportRaces(r *races, instr ssa.Instruction, state *flow.Bitse
 	}
 }
 
-// report reports the access a of the starting function, racing with the goroutine's access other.
-// An access SSA gives no position is placed at the go statement.
+// report reports the access a of the starting function, racing with the goroutine's access other:
+// MS402 for a pair of map operations, MS401 otherwise. An access SSA gives no position is placed
+// at the go statement.
 func (c *checker) report(p pair, a, other access) {
+	id, help, prefix := CaptureID, helpRace, ""
+	if p.inMap {
+		id, help, prefix = MapID, helpMapRace, mapPrefix
+	}
+
 	name := variableName(p.v, a.path)
 	start := p.start.Pos()
-	goroutineSide := fmt.Sprintf(msgGoroutineSide, variableName(p.v, other.path), participle(other.write))
+	goroutineSide := fmt.Sprintf(msgGoroutineSide, prefix+variableName(p.v, other.path), participle(other.write))
 
 	report.Report(c.pass, analysis.Diagnostic{
-		Pos:      cmp.Or(a.instr.Pos(), start),
-		Category: CaptureID.String(),
-		Message:  fmt.Sprintf(msgRace, CaptureID, name, participle(a.write), verb(other.write)),
+		Pos:      cmp.Or(a.pos, start),
+		Category: id.String(),
+		Message:  fmt.Sprintf(msgRace, id, prefix+name, participle(a.write), verb(other.write)),
 		Related: []analysis.RelatedInformation{
-			{Pos: cmp.Or(other.instr.Pos(), start), Message: goroutineSide},
+			{Pos: cmp.Or(other.pos, start), Message: goroutineSide},
 			{Pos: start, Message: msgStarted},
 		},
-		SuggestedFixes: []analysis.SuggestedFix{{Message: fmt.Sprintf(helpRace, name)}},
+		SuggestedFixes: []analysis.SuggestedFix{{Message: fmt.Sprintf(help, name)}},
 	})
 }
 

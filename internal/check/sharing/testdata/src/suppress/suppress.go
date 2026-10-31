@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package suppress has a race that a //memsafe:allow directive suppresses.
+// Package suppress has a race and a map race that //memsafe:allow directives suppress.
 package suppress
 
 func work() error { return nil }
@@ -32,4 +32,13 @@ func suppressed() error {
 
 	//memsafe:allow MS401 the caller only logs err, and a stale value is acceptable there
 	return err
+}
+
+func suppressedMap() {
+	m := map[string]int{}
+
+	go func() { m["a"] = 1 }()
+
+	//memsafe:allow MS402 the map is only read for a debug log, and the program never runs it concurrently
+	_ = m["a"]
 }
