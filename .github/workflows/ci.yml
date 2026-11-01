@@ -112,10 +112,27 @@ jobs:
           name: bench
           path: bench-results/
 
+  conformance:
+    name: checklocks conformance
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      # MS403 must give the same verdicts as gVisor checklocks on checklocks' own test cases
+      # (decision D6). The corpus is fetched into a temporary directory and left nowhere.
+      - run: make conformance CONFORMANCE_OUT=conformance.md
+      - if: always()
+        run: '[ -f conformance.md ] && cat conformance.md >> "$GITHUB_STEP_SUMMARY" || true'
+
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [changes, check, coverage, bench]
+    needs: [changes, check, coverage, bench, conformance]
     # Runs even when a job it needs failed or was skipped, so that it always reports a result.
     if: always()
     steps:

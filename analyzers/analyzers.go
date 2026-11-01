@@ -34,6 +34,7 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/tochemey/gomemsafe/internal/check/lifetime"
+	"github.com/tochemey/gomemsafe/internal/check/locks"
 	"github.com/tochemey/gomemsafe/internal/check/ownership"
 	"github.com/tochemey/gomemsafe/internal/check/sharing"
 	"github.com/tochemey/gomemsafe/internal/check/unsafeflow"
@@ -44,7 +45,8 @@ import (
 // analyzer that exports facts, run automatically through Requires.
 func All() []*analysis.Analyzer {
 	return []*analysis.Analyzer{
-		directive.Analyzer, unsafeflow.Analyzer, lifetime.Analyzer, sharing.Analyzer, ownership.Analyzer,
+		directive.Analyzer, unsafeflow.Analyzer, lifetime.Analyzer, sharing.Analyzer, locks.Analyzer,
+		ownership.Analyzer,
 	}
 }
 

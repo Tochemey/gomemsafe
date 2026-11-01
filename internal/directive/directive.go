@@ -20,9 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package directive parses //memsafe: comments, once per package, for every check to share.
+// Package directive parses //memsafe: comments and gVisor checklocks annotations, once per
+// package, for every check to share.
 //
-// Five verbs are enforced today. The first is allow:
+// Five //memsafe: verbs are enforced today. The first is allow:
 //
 //	//memsafe:allow MS301[,MS302] <reason>
 //
@@ -48,6 +49,25 @@
 //
 // To implement a verb, remove it from pendingVerbs, parse its arguments in parse, and expose
 // what checks need through Result.
+//
+// Lock contracts use checklocks' annotations verbatim, so that code annotated for checklocks
+// works unchanged:
+//
+//	// +checklocks:mu          on a field or a global: accessing it needs mu held
+//	// +checklocks:f.mu        on a function: callers hold f.mu, and the body may assume it
+//	// +checklocksread:f.mu    the same, for reading
+//	// +checklocksacquire:f.mu the function locks f.mu for its caller
+//	// +checklocksrelease:f.mu the function unlocks the f.mu its caller holds
+//	// +checklocksexclude:f.mu callers must not hold f.mu
+//	// +checklocksignore       the body is not checked
+//	// +checklocksforce        on a line: the assertion there is taken as true
+//
+// A lock is a field or a global whose type is a Mutex, an RWMutex, or a sync.Locker, named
+// from the struct that declares the guarded field, from a parameter, receiver, or result of
+// the function, or among the package's globals. Result exposes the guards and contracts,
+// which the summary analyzer exports as facts. The annotations checklocks has that gomemsafe
+// does not check yet, such as +checkatomic, are reported as MS000, as are malformed ones;
+// +checklocksfail, checklocks' own test marker, is accepted and left to the conformance run.
 package directive
 
 import (
@@ -105,6 +125,7 @@ type Result struct {
 	allowed    map[lineKey][]string
 	contractOf map[*types.Func]*Contract
 	owned      map[*types.TypeName]bool
+	lock       lockFacts
 }
 
 // Contract is what the //memsafe:viewof, //memsafe:invalidates, and //memsafe:consumes
@@ -158,10 +179,16 @@ func run(pass *analysis.Pass) (any, error) {
 	res := &Result{
 		allowed: make(map[lineKey][]string), contractOf: make(map[*types.Func]*Contract),
 		owned: make(map[*types.TypeName]bool),
+		lock: lockFacts{
+			guards: make(map[types.Object][]Guard), locks: make(map[types.Object]bool),
+			contracts: make(map[*types.Func]*LockContract), forced: make(map[lineKey]bool),
+		},
 	}
 	report := !vetmode.FactsOnly()
 
 	for _, file := range pass.Files {
+		parseLocks(pass, res, file, report)
+
 		docs := docTargets(file)
 
 		for _, group := range file.Comments {

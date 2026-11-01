@@ -15,22 +15,26 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
             └─ cmd/gomemsafe in vet-tool mode
                  ├─ vetmode: is this a facts-only run (a dependency)?
                  └─ unitchecker.Main(analyzers.All()...)
-                      ├─ directive    parse //memsafe: comments, view contracts; report MS000
+                      ├─ directive    parse //memsafe: comments, view contracts, and checklocks
+                      │               annotations; report MS000
                       ├─ prefilter    which function calls which static callee, and passes it
                       │               a parameter
                       ├─ lazyssa      SSA for the package, built only if asked
                       ├─ summary      per-function facts → .vetx (all packages): the arguments
                       │               taken back, the view returned, the views ended, the
-                      │               arguments consumed, whether a call may synchronise;
-                      │               owned types
+                      │               arguments consumed, whether a call may synchronise, the
+                      │               lock contract; owned types; guarded fields and globals
                       └─ checks       lifetime (MS301, MS302), skipped in facts-only runs;
                                       unsafeflow (MS101, MS102, MS103; MS104 with -unsafeflow.safety), not run in facts-only runs;
                                       sharing (MS401, MS402), skipped in facts-only runs;
+                                      locks (MS403), skipped in facts-only runs;
                                       ownership (MS501), skipped in facts-only runs
                            └─ lifetime: invalidation + flow, must-dataflow on SSA
                            └─ unsafeflow: syntax, and for MS102 flow on SSA
                            └─ sharing: flow on SSA, one fact per goroutine and captured
                                 variable, and a must-synchronised flow over each goroutine
+                           └─ locks: flow on SSA, must-held and may-held per lock, function
+                                literals solved in place at their calls
                            └─ ownership: flow on SSA, maybe-moved, with edge effects for select
                            └─ locate: points diagnostics at the value used
                            └─ report: emits diagnostics, honouring //memsafe:allow
@@ -45,12 +49,14 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `cmd/gomemsafe` | The binary; picks front-end or vet-tool mode | analyzers, frontend, trace, vetmode |
 | `internal/catalog` | The stable check IDs (`MS301`, …), implemented and planned | none |
 | `internal/check/lifetime` | MS301, use after invalidation; MS302, a view used after its owner ended it | engine packages, locate, report |
+| `internal/check/locks` | MS403, a lock contract broken: a guarded field or global accessed, or a function called or returning, against its checklocks annotations | catalog, directive, flow, lazyssa, prefilter, report, summary, trace, vetmode |
 | `internal/check/ownership` | MS501, a value used after its ownership moved | catalog, directive, flow, invalidation, lazyssa, locate, prefilter, report, summary, trace, vetmode |
 | `internal/check/sharing` | MS401, a variable a goroutine captures, accessed on both sides with no synchronisation between them; MS402, the same race on the map such a variable holds | catalog, directive, flow, lazyssa, prefilter, report, summary, trace, vetmode |
 | `internal/check/unsafeflow` | MS101, a uintptr turned back into a pointer where vet cannot see it; MS102, a string used after a write into the bytes it shares; MS103, a reflect header value used as memory; MS104 (opt-in), an unsafe operation without a `// SAFETY:` comment | catalog, directive, flow, lazyssa, locate, prefilter, report, trace |
 | `internal/cmd/bench` | Development command: the benchmark harness (design §7.1) | frontend, trace |
+| `internal/cmd/conformance` | Development command: runs gVisor checklocks' own test cases through gomemsafe and checklocks, and compares the verdicts (decision D6) | catalog, frontend |
 | `internal/cmd/rsswrap` | Development command: `-toolexec` wrapper recording each compile's peak RSS | trace |
-| `internal/directive` | `//memsafe:` parsing: suppressions, function contracts (`viewof`, `invalidates`, `consumes`), owned types; MS000 | catalog, effect, vetmode |
+| `internal/directive` | `//memsafe:` parsing: suppressions, function contracts (`viewof`, `invalidates`, `consumes`), owned types; checklocks annotations: guards of fields and globals, lock contracts, forced and ignored lines; MS000 | catalog, effect, vetmode |
 | `internal/flow` | Must-dataflow engine over SSA, with optional effects on edges | none |
 | `internal/frontend` | Runs vet, decodes its JSON (`Decode`), renders, exit codes, `-stats` | trace |
 | `internal/effect` | Known effects of library calls: invalidations (`sync.Pool.Put`), the standard library's views and the events that end them, and the calls of `sync` and `sync/atomic` that synchronise | none |
@@ -59,7 +65,7 @@ go tool gomemsafe ./...                                      cmd/gomemsafe → f
 | `internal/locate` | Maps SSA instructions back to the source expressions of the values they use | none |
 | `internal/prefilter` | Static callees per function, and those passed a parameter; whether a function calls an interface method or a function value, and whether it communicates on a channel; calls by position | none |
 | `internal/report` | The one way checks emit diagnostics | directive |
-| `internal/summary` | Facts of what each function does to its arguments (taken back, viewed, views ended, consumed), of whether a call of it may synchronise, and of owned types, the only fact producer | directive, effect, flow, invalidation, lazyssa, prefilter |
+| `internal/summary` | Facts of what each function does to its arguments (taken back, viewed, views ended, consumed), of whether a call of it may synchronise, of its lock contract, of owned types, and of guarded fields, globals, and locks, the only fact producer | directive, effect, flow, invalidation, lazyssa, prefilter |
 | `internal/trace` | `GOMEMSAFE_TRACE` timing events | vetmode |
 | `internal/vetmode` | Vet-tool invocation and facts-only detection | none |
 
@@ -144,6 +150,12 @@ stays byte-identical across edits that do not change a summary.
   behind, even when interrupted. To move a pin, change its tag and commit together.
 - A function that exceeds the dataflow budget reports nothing and counts as a budget hit.
   Raise `flow.DefaultBudget` only with a benchmark that shows the need.
+- `make conformance` runs gVisor checklocks' own test cases through both checklocks and
+  gomemsafe, in a temporary module, and fails on any line of a compared file where the
+  verdicts differ (decision D6). `internal/cmd/conformance` pins the corpus commit and the
+  tool version, lists which files are compared and why the others are only shown, and puts
+  the table in the CI job summary. When a change makes a context file agree, move it to the
+  compared set; to move a pin, change both versions together and commit.
 
 ## Conventions
 
