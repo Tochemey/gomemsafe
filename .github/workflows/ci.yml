@@ -126,8 +126,12 @@ jobs:
       # MS403 must give the same verdicts as gVisor checklocks on checklocks' own test cases
       # (decision D6). The corpus is fetched into a temporary directory and left nowhere.
       - run: make conformance CONFORMANCE_OUT=conformance.md
+      # The table is written before the verdicts are compared, so it is shown on failure too.
       - if: always()
-        run: '[ -f conformance.md ] && cat conformance.md >> "$GITHUB_STEP_SUMMARY" || true'
+        run: |
+          if [ -f conformance.md ]; then
+            cat conformance.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   ci:
     name: ci
