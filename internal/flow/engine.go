@@ -67,6 +67,10 @@ type Engine struct {
 	Budget int
 	// BudgetHits counts the functions abandoned because of the budget.
 	BudgetHits int
+	// Spent is the budget the last Solve used: the instructions it visited, summed over all
+	// iterations. A problem that solves other functions while being solved charges their cost
+	// to its own budget with it.
+	Spent int
 
 	in, out []Bitset
 	reached []bool
@@ -115,6 +119,8 @@ func (e *Engine) Solve(fn *ssa.Function, p Problem) (Solution, Outcome) {
 		budget = DefaultBudget
 	}
 
+	e.Spent = 0
+
 	e.work = e.work[:0]
 	if len(fn.Blocks) > 0 {
 		e.reached[0] = true
@@ -129,6 +135,8 @@ func (e *Engine) Solve(fn *ssa.Function, p Problem) (Solution, Outcome) {
 		b := fn.Blocks[i]
 
 		budget -= len(b.Instrs) + 1
+		e.Spent += len(b.Instrs) + 1
+
 		if budget < 0 {
 			e.BudgetHits++
 			return Solution{}, Unknown

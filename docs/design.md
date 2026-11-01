@@ -147,7 +147,7 @@ Dependencies are the standard library plus `golang.org/x/tools`
 | `internal/locate` | Maps an SSA instruction back to the source expression of the value it uses, so that diagnostics point at that value. |
 | `internal/vetmode` | Detects vet-tool invocations and facts-only (`VetxOnly`) runs. |
 | `internal/trace` | `GOMEMSAFE_TRACE` timing events, used by `-stats` and the benchmarks. |
-| `internal/cmd/bench`, `internal/cmd/rsswrap` | Development commands: the benchmark harness for §7.1, and the `-toolexec` wrapper that measures compile memory. |
+| `internal/cmd/bench`, `internal/cmd/rsswrap`, `internal/cmd/conformance` | Development commands: the benchmark harness for §7.1, the `-toolexec` wrapper that measures compile memory, and the checklocks conformance run of D6, which compares MS403's verdicts with checklocks' own test cases. |
 | `cmd/gomemsafe` | A dual-mode binary ([D1](decisions.md)). |
 
 ### 4.2 Function summaries — Go's stand-in for lifetime signatures
@@ -221,7 +221,7 @@ applies, so the command line never mentions tiers.
 
 | ID | Check | Annotation |
 |---|---|---|
-| MS403 | A field accessed without holding its guard lock, or a function called without the lock it requires | checklocks syntax ([D6](decisions.md)): `// +checklocks:mu` on the field; `+checklocks:mu`, `+checklocksread:mu`, `+checklocksacquire:mu`, `+checklocksrelease:mu` on functions |
+| MS403 | A lock contract broken: a field or a global accessed without holding the lock its annotation names, exclusively for a write; a function called without the locks its annotations say callers hold, or while holding one they say callers must not; a function returning without a lock it says it leaves held, or holding any other, or holding different locks on different paths; a lock locked while held, or unlocked while not held or held in another mode. A lock is held where every path holds it, and may be held where some path does. Locks are told apart by their root, a parameter, a global, a local variable, a call's result, or a loaded value, and the fields from it, so `a.mu` and `b.mu` are different locks and `tc.ptr.mu` is one lock wherever `tc.ptr` is read; a lock a function stores into a field is not followed. What a local pointer variable holds is followed through its stores, including those made by function literals called directly, so a value loaded before a later store keeps its identity. A function literal called or deferred directly is analysed where it is called, with the caller's lock state, and the state at its returns continues after the call; one passed on, stored, or started as a goroutine is analysed on its own with no lock held. Deferred calls apply where the function returns, in reverse order; one pending on some paths only is assumed to pair with the acquire on those paths: its releases apply and nothing in it is reported. A loop body is analysed with the state it is first entered with, as checklocks does, so a lock a later iteration leaves held is not reported after the loop. A field of a value the function allocated itself is not checked. A `+checklocksforce` line takes the assertion on it as true; a `+checklocksignore` line reports nothing; a `+checklocksignore` function has its body skipped, its contract still binding callers. Only functions that use an annotated object are analysed, so unannotated code is never reported. The verdicts agree with checklocks' own test cases, which CI checks. | checklocks syntax ([D6](decisions.md)): `// +checklocks:mu` on a field or a global; `+checklocks:f.mu`, `+checklocksread:f.mu`, `+checklocksacquire:f.mu`, `+checklocksrelease:f.mu`, `+checklocksexclude:f.mu`, `+checklocksignore` on functions; `+checklocksforce` and `+checklocksignore` on lines. `+checkatomic`, `+checklocksreadany`, `+checklocksalias`, and the read and write-only variants are reported as not supported yet (MS000) |
 
 ### Tier 2 — Ownership and borrowing (fires only on annotated code; sound within that scope)
 
@@ -411,6 +411,11 @@ These are stated plainly so that users know what a clean run does *not* prove.
 - Happens-before reasoning is intra-procedural plus summaries, and a release is never paired
   with its acquire: any synchronisation on either side of a goroutine capture keeps MS401
   silent, so a race that merely sits next to a lock or a channel operation is missed.
+- Lock state (MS403) is intra-procedural plus contracts, and follows checklocks' choices: a
+  lock stored into a field, a loop's later iterations, and a deferred call pending on some
+  paths only are not followed, so a lock leaked that way is missed rather than reported. The
+  checklocks annotations gomemsafe does not check yet, atomics, read-any guards, and aliases,
+  are reported as not supported rather than checked.
 - Generic functions are summarised once over their generic body, with type parameters treated
   conservatively.
 - MS301 tracks only values that share memory with the callee: pointers, slices (reslices

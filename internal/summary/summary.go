@@ -24,14 +24,17 @@
 // a normal return, and exports that as a Fact: the parameters it takes back (MS301), the
 // parameter its first result is a view into, and the events it is on each parameter's buffer
 // (MS302), and the parameters whose ownership it takes (MS501). It also records whether a call
-// of the function may synchronise with another goroutine (MS401). Callers in other packages read
-// the fact instead of the callee's body, the way Rust's borrow checker trusts signatures.
+// of the function may synchronise with another goroutine (MS401), and the lock contract its
+// checklocks annotations declare (MS403). Callers in other packages read the fact instead of
+// the callee's body, the way Rust's borrow checker trusts signatures.
 //
 // A function's contract, declared with //memsafe:viewof, //memsafe:invalidates, and
 // //memsafe:consumes, is part of its fact as declared, whatever its body does; what the summary
 // derives from the body is added to it. Ownership is never derived: only a contract declares
 // it. Known effects (package effect) take precedence over both. A type declared with
-// //memsafe:owned gets an OwnedFact, so that its values move in every package.
+// //memsafe:owned gets an OwnedFact, so that its values move in every package. A field or a
+// global that checklocks annotations guard, or name as a lock, gets a GuardFact, so that
+// accesses to it are checked in every package.
 //
 // A function synchronises when its body, its function literals included, communicates on a
 // channel or calls a function that may synchronise: one package effect knows, such as
@@ -59,6 +62,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ssa"
@@ -77,7 +81,7 @@ var Analyzer = &analysis.Analyzer{
 	Doc:        "computes per-function effect summaries and exports them as facts",
 	Requires:   []*analysis.Analyzer{directive.Analyzer, prefilter.Analyzer, lazyssa.Analyzer},
 	Run:        run,
-	FactTypes:  []analysis.Fact{new(Fact), new(OwnedFact)},
+	FactTypes:  []analysis.Fact{new(Fact), new(OwnedFact), new(GuardFact)},
 	ResultType: reflect.TypeFor[*Result](),
 }
 
@@ -97,6 +101,8 @@ type Fact struct {
 	// Syncs reports whether a call of the function may synchronise with another goroutine. Only
 	// functions that other packages can name, those with exported names, export it.
 	Syncs bool
+	// Locks is the lock contract the function's checklocks annotations declare, if any.
+	Locks *directive.LockContract
 }
 
 // OwnedFact marks a type whose values have move semantics: //memsafe:owned in its doc comment.
@@ -106,18 +112,23 @@ type OwnedFact struct {
 }
 
 // Result is what checks need from the summaries of one package. It implements
-// invalidation.Lookup.
+// invalidation.Lookup. The checks that read it run in parallel goroutines, the way unitchecker
+// runs the analyzers of one package, so the caches of imported facts are filled under mu; what
+// run computes is complete before any check starts and is read without it.
 type Result struct {
 	// Triggered lists the function declarations, in source order, that call at least one
 	// invalidating function directly or inside a function literal.
 	Triggered []*prefilter.Func
 
-	pass          *analysis.Pass
-	dir           *directive.Result
-	local         map[*types.Func]Fact
-	syncs         map[*types.Func]bool
+	pass  *analysis.Pass
+	dir   *directive.Result
+	local map[*types.Func]Fact
+	syncs map[*types.Func]bool
+
+	mu            sync.Mutex
 	imported      map[*types.Func]Fact
 	ownedImported map[*types.TypeName]bool
+	guardImported map[types.Object]GuardFact
 }
 
 // AFact implements analysis.Fact.
@@ -161,6 +172,10 @@ func (f *Fact) String() string {
 
 	if f.Syncs {
 		parts = append(parts, "syncs")
+	}
+
+	if !f.Locks.Empty() {
+		parts = append(parts, lockString(f.Locks))
 	}
 
 	return strings.Join(parts, " ")
@@ -233,6 +248,9 @@ func (r *Result) Owned(t types.Type) bool {
 		return r.dir.IsOwned(tn)
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	owned, seen := r.ownedImported[tn]
 	if !seen && tn.Pkg() != nil {
 		owned = r.pass.ImportObjectFact(tn, new(OwnedFact))
@@ -291,6 +309,9 @@ func (r *Result) factOf(fn *types.Func) Fact {
 		return r.local[fn]
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if f, ok := r.imported[fn]; ok {
 		return f
 	}
@@ -331,10 +352,19 @@ func run(pass *analysis.Pass) (any, error) {
 	res := &Result{
 		pass: pass, dir: dir, local: make(map[*types.Func]Fact), syncs: make(map[*types.Func]bool),
 		imported: make(map[*types.Func]Fact), ownedImported: make(map[*types.TypeName]bool),
+		guardImported: make(map[types.Object]GuardFact),
 	}
 
 	for _, c := range dir.Contracts {
 		res.local[c.Func] = withContract(Fact{}, c)
+	}
+
+	_, _, contracted := dir.LockFacts()
+
+	for _, fn := range contracted {
+		fact := res.local[fn]
+		fact.Locks, _ = dir.LockContractOf(fn)
+		res.local[fn] = fact
 	}
 
 	callers := make(map[*types.Func][]*prefilter.Func)
@@ -409,6 +439,8 @@ func run(pass *analysis.Pass) (any, error) {
 		pass.ExportObjectFact(tn, &OwnedFact{Owned: true})
 	}
 
+	res.exportGuards()
+
 	for _, f := range pre.Funcs {
 		if invalidates, _, _ := res.candidate(f); invalidates {
 			res.Triggered = append(res.Triggered, f)
@@ -445,6 +477,8 @@ func (r *Result) summarize(ssaRes *lazyssa.Result, f *prefilter.Func, dir *direc
 	if c, ok := dir.ContractOf(f.Obj); ok {
 		fact = withContract(fact, c)
 	}
+
+	fact.Locks, _ = dir.LockContractOf(f.Obj)
 
 	return fact
 }
@@ -516,7 +550,7 @@ func trimEvents(events []effect.Event) []effect.Event {
 
 func equal(a, b Fact) bool {
 	return a.Invalidates == b.Invalidates && a.View == b.View && slices.Equal(a.Events, b.Events) &&
-		a.Consumes == b.Consumes && a.Syncs == b.Syncs
+		a.Consumes == b.Consumes && a.Syncs == b.Syncs && a.Locks.Equal(b.Locks)
 }
 
 // knownViewEffect reports whether package effect knows fn's views and events, which then take

@@ -13,6 +13,8 @@
 - MS104 reports an `unsafe` operation without a `// SAFETY:` comment, enabled with `-unsafeflow.safety`.
 - MS401 reports a variable a goroutine captures, written on one side and accessed on the other with no synchronisation between them, following synchronisation through helper functions in other packages.
 - MS402 reports a map a goroutine captures, written on one side and read or written on the other with no synchronisation between them.
+- MS403 reports a lock contract broken, read from gVisor checklocks' annotations unchanged: a field or a global accessed without holding its guard, a function called or returning against its lock annotations, or a lock locked while held or unlocked while not. Guards and contracts cross packages through facts. CI checks that the verdicts agree with checklocks' own test cases.
+- MS000 reports a checklocks annotation that is malformed, or one gomemsafe does not check yet (`+checkatomic`, `+checklocksreadany`, `+checklocksalias`).
 - MS501 reports a value used after its ownership moved: an `//memsafe:owned` value sent on a channel or stored into another owner, or a value passed to a `//memsafe:consumes` parameter, in any package.
 - MS000 reports a `//memsafe:` directive that is malformed or not supported.
 - Findings name and point at the value used, including in assignments, composite literals, conversions, returns, channel sends, `select` cases, `range` loops, and `go` and `defer` calls.

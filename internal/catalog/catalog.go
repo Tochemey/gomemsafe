@@ -63,6 +63,10 @@ const (
 	// the other with no synchronisation between the two, which the runtime may end with a fatal
 	// error.
 	ConcurrentMapAccess ID = "MS402"
+	// UnguardedField is a lock contract violated: a field or a global accessed without holding
+	// the lock its checklocks annotation names, or a function called or returning in breach of
+	// its lock annotations.
+	UnguardedField ID = "MS403"
 	// UseAfterMove is a use of a value after its ownership moved: an owned value sent on a
 	// channel or stored into another owner, or any value passed to a consuming parameter.
 	UseAfterMove ID = "MS501"
@@ -74,7 +78,6 @@ const (
 	UseAfterCFree         ID = "MS202"
 	CAllocationLeak       ID = "MS203"
 	EscapingBorrowedView  ID = "MS303"
-	UnguardedField        ID = "MS403"
 	EscapingBorrow        ID = "MS502"
 	AppendAliasing        ID = "MS503"
 	ForbiddenImport       ID = "MS901"

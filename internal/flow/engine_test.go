@@ -165,6 +165,17 @@ func f(n int) {
 	if eng.BudgetHits != 1 {
 		t.Fatalf("BudgetHits = %d, want 1", eng.BudgetHits)
 	}
+
+	// The budget was exceeded by the first block visited, so that block's cost was spent.
+	if eng.Spent <= eng.Budget {
+		t.Fatalf("Spent = %d, want more than the budget of %d", eng.Spent, eng.Budget)
+	}
+
+	eng.Budget = 0
+
+	if _, outcome := eng.Solve(fn, newCallProblem(fn, 1)); outcome != Solved || eng.Spent <= 0 || eng.Spent >= DefaultBudget {
+		t.Fatalf("outcome = %v, Spent = %d; want Solved within the default budget", outcome, eng.Spent)
+	}
 }
 
 func TestSolveLargeFunctionIsFast(t *testing.T) {

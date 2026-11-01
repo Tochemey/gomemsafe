@@ -24,6 +24,7 @@ package summary_test
 
 import (
 	"go/types"
+	"sync"
 	"testing"
 
 	"golang.org/x/tools/go/analysis/analysistest"
@@ -161,6 +162,43 @@ func TestResultResolvesOwnership(t *testing.T) {
 
 // TestAnnotatedByAConsumingParameterAlone covers a package that declares a consuming parameter
 // and no owned type, and one that learns of it from a fact.
+// TestResultIsSafeForConcurrentLookups reads imported facts of every kind from several
+// goroutines at once, as the checks do when unitchecker runs them in parallel on one package.
+// The race detector fails the test if the caches of imported facts are not synchronised.
+func TestResultIsSafeForConcurrentLookups(t *testing.T) {
+	results := analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "locks", "locksclient")
+
+	locks := results[0].Pass.Pkg
+	counter := locks.Scope().Lookup("Counter").Type()
+	n := counter.Underlying().(*types.Struct).Field(1)
+	get, _, _ := types.LookupFieldOrMethod(types.NewPointer(counter), true, locks, "Get")
+	res := results[1].Result.(*summary.Result)
+
+	var wg sync.WaitGroup
+
+	for range 8 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			if _, ok := res.LockContractOf(get.(*types.Func)); !ok {
+				t.Error("Get has no lock contract")
+			}
+
+			if guards := res.GuardsOf(n); len(guards) != 1 {
+				t.Errorf("GuardsOf(n) = %+v", guards)
+			}
+
+			if res.Owned(counter) || res.Syncs(get.(*types.Func)) {
+				t.Error("Counter is owned, or Get synchronises")
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
 func TestAnnotatedByAConsumingParameterAlone(t *testing.T) {
 	for _, r := range analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "consumer", "consumerclient") {
 		if !r.Result.(*summary.Result).Annotated() {

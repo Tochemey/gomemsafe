@@ -24,10 +24,12 @@ COVERAGE_MIN  := 85
 COVER_PROFILE := coverage.out
 # BENCH_OUT, when set, also writes the benchmark results as JSON and markdown to that directory.
 BENCH_OUT     ?=
+# CONFORMANCE_OUT, when set, also writes the checklocks conformance table to that file.
+CONFORMANCE_OUT ?=
 # FUZZTIME is how long make fuzz runs each fuzz target.
 FUZZTIME      ?= 30s
 
-.PHONY: check-fast check-task check-full vet lint deps check-tests secrets test vuln actionlint bench bench-short fuzz clean
+.PHONY: check-fast check-task check-full vet lint deps check-tests secrets test vuln actionlint bench bench-short conformance fuzz clean
 
 ## check-fast: the edit loop (seconds)
 check-fast: vet lint deps check-tests secrets
@@ -113,6 +115,11 @@ bench:
 ## bench-short: only the small generated corpus; no network, about a minute
 bench-short:
 	go run ./internal/cmd/bench -short $(if $(BENCH_OUT),-out $(BENCH_OUT))
+
+## conformance: MS403 against gVisor checklocks' own test cases, as CI runs it (network; see
+## internal/cmd/conformance). Decision D6 requires the verdicts to agree.
+conformance:
+	go run ./internal/cmd/conformance $(if $(CONFORMANCE_OUT),-out $(CONFORMANCE_OUT))
 
 ## fuzz: run each fuzz target for FUZZTIME. Their seed inputs already run with make test; a
 ## failing input is saved under the package's testdata/fuzz and then runs there too.
