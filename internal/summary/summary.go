@@ -62,6 +62,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ssa"
@@ -111,16 +112,20 @@ type OwnedFact struct {
 }
 
 // Result is what checks need from the summaries of one package. It implements
-// invalidation.Lookup.
+// invalidation.Lookup. The checks that read it run in parallel goroutines, the way unitchecker
+// runs the analyzers of one package, so the caches of imported facts are filled under mu; what
+// run computes is complete before any check starts and is read without it.
 type Result struct {
 	// Triggered lists the function declarations, in source order, that call at least one
 	// invalidating function directly or inside a function literal.
 	Triggered []*prefilter.Func
 
-	pass          *analysis.Pass
-	dir           *directive.Result
-	local         map[*types.Func]Fact
-	syncs         map[*types.Func]bool
+	pass  *analysis.Pass
+	dir   *directive.Result
+	local map[*types.Func]Fact
+	syncs map[*types.Func]bool
+
+	mu            sync.Mutex
 	imported      map[*types.Func]Fact
 	ownedImported map[*types.TypeName]bool
 	guardImported map[types.Object]GuardFact
@@ -243,6 +248,9 @@ func (r *Result) Owned(t types.Type) bool {
 		return r.dir.IsOwned(tn)
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	owned, seen := r.ownedImported[tn]
 	if !seen && tn.Pkg() != nil {
 		owned = r.pass.ImportObjectFact(tn, new(OwnedFact))
@@ -300,6 +308,9 @@ func (r *Result) factOf(fn *types.Func) Fact {
 	if fn.Pkg() == r.pass.Pkg {
 		return r.local[fn]
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if f, ok := r.imported[fn]; ok {
 		return f

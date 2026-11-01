@@ -106,6 +106,9 @@ func (r *Result) guardFactOf(obj types.Object) GuardFact {
 		return f
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	imported, ok := r.guardImported[obj]
 	if !ok {
 		r.pass.ImportObjectFact(obj, &imported)
