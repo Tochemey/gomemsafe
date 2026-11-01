@@ -274,31 +274,18 @@ func directCall(instr ssa.Instruction, fn ssa.Value) bool {
 // trackAllocs records the local variables whose every use is a load, a store, or a capture by
 // an inlined literal, so that what they hold is known.
 func (u *universe) trackAllocs(instr ssa.Instruction, _ *frame) {
-	if alloc, ok := instr.(*ssa.Alloc); ok && u.local(alloc, make(map[ssa.Value]bool)) {
+	if alloc, ok := instr.(*ssa.Alloc); ok && u.local(alloc) {
 		u.tracked[alloc] = true
 	}
 }
 
-// local reports whether every use of the address v is a load, a store, or a capture by a
-// literal that is only called directly, whose free variable is used so too.
-func (u *universe) local(v ssa.Value, seen map[ssa.Value]bool) bool {
-	if seen[v] {
-		return true
-	}
-
-	seen[v] = true
-
-	refs := v.Referrers()
-	if refs == nil {
-		return false
-	}
-
-	for _, ref := range *refs {
+// local reports whether every use of the address v, a local variable or a free variable
+// bound to one, is a load, a store, or a capture by a literal that is only called directly,
+// whose free variable is used so too. The only unary operation on an address is a load.
+func (u *universe) local(v ssa.Value) bool {
+	for _, ref := range *v.Referrers() {
 		switch x := ref.(type) {
 		case *ssa.UnOp:
-			if x.Op != token.MUL {
-				return false
-			}
 		case *ssa.Store:
 			if x.Addr != v {
 				return false
@@ -310,7 +297,7 @@ func (u *universe) local(v ssa.Value, seen map[ssa.Value]bool) bool {
 			}
 
 			for i, binding := range x.Bindings {
-				if binding == v && !u.local(lit.FreeVars[i], seen) {
+				if binding == v && !u.local(lit.FreeVars[i]) {
 					return false
 				}
 			}
@@ -442,19 +429,13 @@ func (u *universe) internCall(call ssa.CallInstruction, f *frame, c *checker) {
 // internRef records the keys the contract reference ref may name at a call with args and
 // result, or, with no args, in the frame's own function.
 func (u *universe) internRef(ref directive.LockRef, args []ssa.Value, result ssa.Value, f *frame) {
-	switch ref.Kind {
-	case directive.LockGlobal:
+	if ref.Kind == directive.LockGlobal {
 		u.intern(key{global: ref.Global}.extend(ref.Path))
-	case directive.LockParam:
-		if args == nil {
-			u.internAll(f.fn.Params[ref.Index], ref.Path, f)
-		} else if ref.Index < len(args) {
-			u.internAll(args[ref.Index], ref.Path, f)
-		}
-	case directive.LockResult:
-		if v, ok := resultOf(result, ref.Index); ok {
-			u.internAll(v, ref.Path, f)
-		}
+		return
+	}
+
+	if v, ok := refValue(ref, args, result, f); ok {
+		u.internAll(v, ref.Path, f)
 	}
 }
 

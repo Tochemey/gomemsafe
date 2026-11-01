@@ -143,10 +143,8 @@ func (p *locking) enter(f *frame, state *flow.Bitset) {
 		return
 	}
 
-	for _, ref := range f.contract.HeldOnEntry() {
-		if i, ok := p.refIndex(ref, nil, nil, f, state); ok {
-			p.lockBits(i, ref.Exclusive, state)
-		}
+	for _, l := range p.refLocks(f.contract.HeldOnEntry(), nil, nil, f, state) {
+		p.lockBits(l.i, l.ref.Exclusive, state)
 	}
 }
 
@@ -167,7 +165,8 @@ func (p *locking) store(s *ssa.Store, f *frame, state *flow.Bitset) {
 }
 
 // load records which value a load of a tracked local variable yields: the one the variable
-// holds on every path here.
+// holds on every path here. The universe paired the load with every value stored into the
+// variable, so each pair has its fact.
 func (p *locking) load(load *ssa.UnOp, f *frame, state *flow.Bitset) {
 	alloc, ok := p.u.isAlloc(p.u.resolve(load.X, f, state, nil))
 	if !ok {
@@ -175,15 +174,10 @@ func (p *locking) load(load *ssa.UnOp, f *frame, state *flow.Bitset) {
 	}
 
 	for _, stored := range p.u.stores[alloc] {
-		i, ok := p.u.is[isPair{load, stored}]
-		if !ok {
-			continue
-		}
-
 		if state.Has(p.u.holds[holdPair{alloc, stored}]) {
-			state.Set(i)
+			state.Set(p.u.is[isPair{load, stored}])
 		} else {
-			state.Clear(i)
+			state.Clear(p.u.is[isPair{load, stored}])
 		}
 	}
 }
@@ -218,7 +212,8 @@ func (p *locking) fieldAccess(instr ssa.Instruction, base ssa.Value, field int, 
 }
 
 // access checks that every guard of obj is held, exclusively for a write, at instr. A forced
-// line locks the guard instead.
+// line locks the guard instead. The universe interned each guard's key for every value the
+// base resolves to, so each key has its lock.
 func (p *locking) access(instr ssa.Instruction, obj types.Object, base key, write bool, f *frame, state *flow.Bitset) {
 	if p.silent > 0 {
 		return
@@ -232,10 +227,7 @@ func (p *locking) access(instr ssa.Instruction, obj types.Object, base key, writ
 	pos := p.c.accessPos(instr, obj, f)
 
 	for _, guard := range guards {
-		i, ok := p.u.lockIndex[guardKey(guard, base)]
-		if !ok {
-			continue
-		}
+		i := p.u.lockIndex[guardKey(guard, base)]
 
 		need := p.u.held(i)
 		if write {
@@ -279,25 +271,20 @@ func (p *locking) returns(ret *ssa.Return, f *frame, state *flow.Bitset) {
 	expected := make(map[int]bool)
 
 	if f.contract != nil {
-		for _, ref := range f.contract.HeldOnExit() {
-			i, ok := p.refIndex(ref, nil, resultsOf(ret), f, state)
-			if !ok {
-				continue
-			}
+		for _, l := range p.refLocks(f.contract.HeldOnExit(), nil, resultsOf(ret), f, state) {
+			expected[l.i] = true
 
-			expected[i] = true
-
-			need := p.u.held(i)
-			if ref.Exclusive {
-				need = p.u.excl(i)
+			need := p.u.held(l.i)
+			if l.ref.Exclusive {
+				need = p.u.excl(l.i)
 			}
 
 			switch {
 			case state.Has(need):
 			case p.c.forced(pos):
-				p.lockBits(i, ref.Exclusive, state)
+				p.lockBits(l.i, l.ref.Exclusive, state)
 			default:
-				p.c.reportReturn(pos, f.fn, ref.Name, msgReturnWithout, helpLockBeforeReturn)
+				p.c.reportReturn(pos, f.fn, l.ref.Name, msgReturnWithout, helpLockBeforeReturn)
 			}
 		}
 	}

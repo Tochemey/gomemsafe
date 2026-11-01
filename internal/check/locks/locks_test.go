@@ -48,7 +48,17 @@ func TestReportsBrokenLockContracts(t *testing.T) {
 }
 
 func TestReportsBrokenContractsAcrossPackages(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), Analyzer, "guardedclient")
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "guardedclient", "guardedfar")
+}
+
+// TestLowersNothingWithoutAnnotations runs the check on a package that uses no annotated
+// object: no function is analysed, and nothing is reported.
+func TestLowersNothingWithoutAnnotations(t *testing.T) {
+	for _, r := range analysistest.Run(t, analysistest.TestData(), Analyzer, "plain") {
+		if len(r.Diagnostics) != 0 {
+			t.Fatalf("%d diagnostics on an unannotated package, want 0", len(r.Diagnostics))
+		}
+	}
 }
 
 func TestStaysSilentOnHonouredContracts(t *testing.T) {

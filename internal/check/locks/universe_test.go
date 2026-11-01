@@ -33,7 +33,8 @@ import (
 
 // literalsSrc has function literals used every way the analysis tells apart: called directly,
 // deferred, passed on, started as a goroutine, and stored into a variable; and local variables
-// that are tracked, captured by inlined literals only, or not.
+// that are tracked, captured by inlined literals only, or not: used by address, or captured by
+// a literal that passes the variable's address on.
 const literalsSrc = `package p
 
 import "sync"
@@ -43,9 +44,13 @@ type T struct {
 	n  int
 }
 
+type holder struct{ ref **T }
+
 func run(f func()) { f() }
 
-func literals(t *T, cond bool) {
+func use(...any) {}
+
+func literals(t *T, cond bool, h *holder) {
 	p := t
 	r := t
 	called := func() { p.n = 1 }
@@ -62,6 +67,10 @@ func literals(t *T, cond bool) {
 	var q *T
 	run(func() { q = t })
 	_ = q
+	s := t
+	h.ref = &s
+	a := t
+	func() { use(&a) }()
 }
 `
 
@@ -75,7 +84,8 @@ func (noFacts) HasLockFacts(types.Object) bool                             { ret
 // TestLiteralsAreInlinedOrEscape checks which literals of the fixture are analysed in place:
 // the called and deferred ones, with their free variables bound to the caller's values, and
 // not the passed, started, or stored ones. The variable only inlined literals capture is
-// tracked; the one an escaping literal stores to is not.
+// tracked; the one an escaping literal stores to, the one whose address is stored, and the one
+// an inlined literal passes on by address are not.
 func TestLiteralsAreInlinedOrEscape(t *testing.T) {
 	pkg := buildSSA(t, literalsSrc)
 	fn := pkg.Func("literals")
@@ -91,8 +101,8 @@ func TestLiteralsAreInlinedOrEscape(t *testing.T) {
 		}
 	}
 
-	if inlined != 2 || escaped != 5 {
-		t.Fatalf("%d literals inlined and %d escaped, want 2 and 5", inlined, escaped)
+	if inlined != 3 || escaped != 5 {
+		t.Fatalf("%d literals inlined and %d escaped, want 3 and 5", inlined, escaped)
 	}
 
 	frames := 0
@@ -105,8 +115,8 @@ func TestLiteralsAreInlinedOrEscape(t *testing.T) {
 		}
 	}
 
-	if frames != 2 {
-		t.Fatalf("%d inline frames, want 2", frames)
+	if frames != 3 {
+		t.Fatalf("%d inline frames, want 3", frames)
 	}
 
 	tracked := 0

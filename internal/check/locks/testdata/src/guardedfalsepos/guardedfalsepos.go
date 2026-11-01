@@ -70,6 +70,14 @@ type fancy struct {
 	n int
 }
 
+// gate has the methods of a lock, but is not one: its calls change no lock state.
+type gate struct{}
+
+func (g *gate) Lock()   {}
+func (g *gate) Unlock() {}
+
+type holder struct{ ref **counter }
+
 func use(...any) {}
 
 func locked(c *counter) {
@@ -183,6 +191,19 @@ func acquiresResult() (result *counter) {
 	result.mu.Lock()
 
 	return result
+}
+
+// +checklocksacquire:second.mu
+func acquiresSecond() (first int, second *counter) {
+	second = new(counter)
+	second.mu.Lock()
+
+	return 1, second
+}
+
+// discardedResult names no lock: the result the contract acquires is not extracted.
+func discardedResult() {
+	acquiresSecond()
 }
 
 // +checklocks:c.mu
@@ -420,4 +441,66 @@ func recovers(c *counter) {
 	c.mu.Lock()
 	c.n = 1
 	c.mu.Unlock()
+}
+
+func notALock(c *counter, g *gate) {
+	g.Lock()
+	c.mu.Lock()
+	c.n = 1
+	c.mu.Unlock()
+	g.Unlock()
+}
+
+func loopWithDefer(c *counter, n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for range n {
+		c.n++
+	}
+}
+
+func literalDefers(c *counter) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	func() {
+		c.rw.Lock()
+		defer c.rw.Unlock()
+
+		c.readMostly = 1
+	}()
+
+	c.n = 1
+}
+
+func conditionalDeferredLiteral(c *counter, cond bool) {
+	if cond {
+		c.mu.Lock()
+		defer func() {
+			c.n = 0
+			c.mu.Unlock()
+		}()
+	}
+
+	use(c)
+}
+
+func twoReturns(c *counter, cond bool) int {
+	if cond {
+		return 0
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.n
+}
+
+func addressStored(c *counter, h *holder) {
+	p := c
+	h.ref = &p
+	p.mu.Lock()
+	p.n = 1
+	p.mu.Unlock()
 }

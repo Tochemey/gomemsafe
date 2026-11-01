@@ -24,7 +24,10 @@
 // report each one.
 package guarded
 
-import "sync"
+import (
+	"sync"
+	"unsafe"
+)
 
 var globalMu sync.Mutex
 
@@ -69,6 +72,17 @@ type withLocker struct {
 	// +checklocks:l
 	n int
 }
+
+type outer struct{ in counter }
+
+type globallyGuarded struct {
+	// +checklocks:globalMu
+	n int
+}
+
+type cptr *counter
+
+type getter interface{ Get() *counter }
 
 func use(...any) {}
 
@@ -339,4 +353,77 @@ func fresh() *counter {
 	local.n = 2
 
 	return c
+}
+
+func outerResult() outer { return outer{} }
+
+func arrayResult() [1]counter { return [1]counter{} }
+
+func byValue() int {
+	return outerResult().in.n // want `MS403: n read here without holding outerResult\(\).in.mu`
+}
+
+func indexedValue() int {
+	return arrayResult()[0].n // want `MS403: n read here without holding arrayResult\(\)\[0\].mu`
+}
+
+func pointerToArray(pa *[2]counter) {
+	pa[0].n = 1 // want `MS403: n written here without holding pa\[0\].mu`
+}
+
+func converted(c *counter) {
+	(*counter)(unsafe.Pointer(c)).n = 1 // want `MS403: n written here without holding c.mu`
+	p := cptr(c)
+	p.n = 2 // want `MS403: n written here without holding c.mu`
+}
+
+func received(ch chan *counter) {
+	(<-ch).n = 1 // want `MS403: n written here without holding \(<-ch\).mu`
+}
+
+func dynamic(get func() *counter, g getter) {
+	get().n = 1   // want `MS403: n written here without holding get\(\).mu`
+	g.Get().n = 2 // want `MS403: n written here without holding g.Get\(\).mu`
+}
+
+func merged(c, other *counter, cond bool) {
+	p := c
+	if cond {
+		p = other
+	}
+
+	p.mu.Lock()
+	p.mu.Lock() // want `MS403: p.mu locked here while already held`
+	p.mu.Unlock()
+}
+
+func rangeIndex(cs []*counter, n int) {
+	for i := range n {
+		cs[i].n = 1 // want `MS403: n written here without holding cs\[\.\.\.\].mu`
+	}
+}
+
+func freshLocks() {
+	c := new(counter)
+	c.mu.Lock()
+	c.mu.Lock() // want `MS403: new\(counter\).mu locked here while already held`
+	c.mu.Unlock()
+
+	l := &counter{}
+	l.mu.Lock()
+	l.mu.Lock() // want `MS403: &counter\{\.\.\.\}.mu locked here while already held`
+	l.mu.Unlock()
+}
+
+func globalGuard(g *globallyGuarded) {
+	g.n = 1 // want `MS403: n written here without holding globalMu`
+}
+
+func twiceInlined(c *counter) {
+	f := func() {
+		c.n = 1 // want `MS403: n written here without holding c.mu`
+	}
+
+	f()
+	f()
 }

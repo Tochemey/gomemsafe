@@ -28,6 +28,29 @@ import (
 	"github.com/tochemey/gomemsafe/internal/flow"
 )
 
+// TestInlineOverBudgetAbandonsTheFunction gives the literals no budget: the first literal
+// inlined is abandoned, which counts one budget hit for the function and marks it unknown, and
+// the next ones add no hit. The frame stack is left as it was.
+func TestInlineOverBudgetAbandonsTheFunction(t *testing.T) {
+	pkg := buildSSA(t, literalsSrc)
+	fn := pkg.Func("literals")
+	c := &checker{sum: noFacts{}}
+	u := newUniverse(fn, nil, c)
+	p := &locking{c: c, u: u, frames: []*frame{u.root}, budget: 1}
+
+	var state flow.Bitset
+
+	state.Reset(u.n)
+
+	for _, child := range u.inlined {
+		p.inline(child, &state)
+	}
+
+	if !p.unknown || c.eng.BudgetHits != 1 || len(p.frames) != 1 {
+		t.Fatalf("unknown %v, %d budget hits, %d frames; want true, 1, 1", p.unknown, c.eng.BudgetHits, len(p.frames))
+	}
+}
+
 // TestLockOperationsChangeTheMode drives one lock through the lock methods: Lock holds it
 // exclusively, DowngradeLock and RLock for reading, Unlock and RUnlock free it, and the nested
 // forms act as the plain ones. Nothing is reported outside the replay, so no checker is needed.

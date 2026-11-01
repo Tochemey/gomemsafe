@@ -53,8 +53,6 @@ import (
 	"go/token"
 	"go/types"
 	"slices"
-	"strconv"
-	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ssa"
@@ -254,18 +252,13 @@ func (c *checker) forced(pos token.Pos) bool { return c.dir.Forced(c.pass.Fset, 
 // accessPos returns where to report an access to obj by instr: its own position, or, when
 // SSA gives it none, such as a conversion of a global's address to an interface, the first
 // place the function's source uses obj from the line of the last positioned instruction
-// before instr in its block, or else the function's position. SSA keeps source order within a
-// block.
+// before instr in its block. SSA keeps source order within a block.
 func (c *checker) accessPos(instr ssa.Instruction, obj types.Object, f *frame) token.Pos {
 	if pos := instr.Pos(); pos.IsValid() {
 		return pos
 	}
 
 	syntax := f.fn.Syntax()
-	if syntax == nil {
-		return f.fn.Pos()
-	}
-
 	lower := syntax.Pos()
 	instrs := instr.Block().Instrs
 
@@ -279,14 +272,12 @@ func (c *checker) accessPos(instr ssa.Instruction, obj types.Object, f *frame) t
 	// The bound is a line: the instructions of one statement, such as the slice a variadic call
 	// makes, are placed anywhere in it.
 	line := c.pass.Fset.Position(lower).Line
+	uses := c.usesOf(f.fn, obj)
+	i := slices.IndexFunc(uses, func(pos token.Pos) bool { return c.pass.Fset.Position(pos).Line >= line })
 
-	for _, pos := range c.usesOf(f.fn, obj) {
-		if c.pass.Fset.Position(pos).Line >= line {
-			return pos
-		}
-	}
-
-	return f.fn.Pos()
+	// The source names what its instructions access, so there is a use, and one from the line,
+	// since the bound precedes the access in source order; the first use stands in otherwise.
+	return uses[max(i, 0)]
 }
 
 // usesOf returns, in source order, the positions where fn's source uses obj.
@@ -377,161 +368,4 @@ func (c *checker) report(d analysis.Diagnostic) {
 	c.seen[k] = true
 
 	report.Report(c.pass, d)
-}
-
-// name words a lock key: its root, then each step of the path, a field by name and an element
-// by the name of its index.
-func (c *checker) name(u *universe, k key) string {
-	var (
-		name string
-		t    types.Type
-	)
-
-	switch {
-	case strings.HasPrefix(k.global, constPrefix):
-		return strings.TrimPrefix(k.global, constPrefix)
-	case k.global != "":
-		name, t = c.globalName(k.global)
-	default:
-		name, t = c.valueName(k.root), k.root.Type()
-	}
-
-	for _, step := range k.steps() {
-		if id, isIndex := strings.CutPrefix(step, "["); isIndex {
-			id, _ = strings.CutSuffix(id, "]")
-			n, _ := strconv.Atoi(id)
-			name += "[" + c.name(u, u.indexKeys[n]) + "]"
-			t = elementOf(t)
-
-			continue
-		}
-
-		i, _ := strconv.Atoi(step)
-
-		// The root of a captured or spilled variable is its address, one pointer further from
-		// the struct than the source names.
-		field, ok := fieldOf(t, i)
-		for ptr, isPtr := t.Underlying().(*types.Pointer); !ok && isPtr; ptr, isPtr = t.Underlying().(*types.Pointer) {
-			t = ptr.Elem()
-			field, ok = fieldOf(t, i)
-		}
-
-		if !ok {
-			break
-		}
-
-		name += "." + field.Name()
-		t = field.Type()
-	}
-
-	return name
-}
-
-// elementOf returns the element type of a slice, an array, or a pointer to an array.
-func elementOf(t types.Type) types.Type {
-	if ptr, ok := t.Underlying().(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-
-	switch x := t.Underlying().(type) {
-	case *types.Slice:
-		return x.Elem()
-	case *types.Array:
-		return x.Elem()
-	}
-
-	return types.Typ[types.Invalid]
-}
-
-// globalName words a global by its key, qualified by its package when it is another's, and
-// returns its type if the package is imported.
-func (c *checker) globalName(global string) (string, types.Type) {
-	path, name := global, global
-	if i := lastDot(global); i >= 0 {
-		path, name = global[:i], global[i+1:]
-	}
-
-	if path == c.pass.Pkg.Path() {
-		if obj := c.pass.Pkg.Scope().Lookup(name); obj != nil {
-			return name, obj.Type()
-		}
-	}
-
-	for _, imported := range c.pass.Pkg.Imports() {
-		if imported.Path() == path {
-			if obj := imported.Scope().Lookup(name); obj != nil {
-				return imported.Name() + "." + name, obj.Type()
-			}
-		}
-	}
-
-	return name, types.Typ[types.Invalid]
-}
-
-// valueName words the root of a key as the source names it, or as "..." when the source
-// gives it no name, such as the element a range loop is at.
-func (c *checker) valueName(v ssa.Value) string {
-	switch x := v.(type) {
-	case *ssa.Parameter, *ssa.FreeVar:
-		return v.Name()
-	case *ssa.Alloc:
-		elem := x.Type().Underlying().(*types.Pointer).Elem()
-
-		switch x.Comment {
-		case "new":
-			return "new(" + types.TypeString(elem, types.RelativeTo(c.pass.Pkg)) + ")"
-		case "complit", "":
-			return "&" + types.TypeString(elem, types.RelativeTo(c.pass.Pkg)) + "{...}"
-		}
-
-		return x.Comment
-	case *ssa.Phi:
-		if x.Comment != "" && !strings.HasPrefix(x.Comment, "range") {
-			return x.Comment
-		}
-
-		return "..."
-	case *ssa.UnOp:
-		if x.Op == token.MUL {
-			return c.valueName(x.X)
-		}
-	case *ssa.FieldAddr:
-		if field, ok := fieldOf(x.X.Type(), x.Field); ok {
-			return c.valueName(x.X) + "." + field.Name()
-		}
-	case *ssa.Field:
-		if field, ok := fieldOf(x.X.Type(), x.Field); ok {
-			return c.valueName(x.X) + "." + field.Name()
-		}
-	case *ssa.IndexAddr:
-		return c.valueName(x.X) + "[" + c.valueName(x.Index) + "]"
-	case *ssa.Index:
-		return c.valueName(x.X) + "[" + c.valueName(x.Index) + "]"
-	case *ssa.Const:
-		return strings.TrimPrefix(constKey(x).global, constPrefix)
-	case *ssa.Call:
-		if callee := x.Call.StaticCallee(); callee != nil {
-			return callee.Name() + "()"
-		}
-
-		return "..."
-	case *ssa.Extract:
-		return c.valueName(x.Tuple) + "[" + strconv.Itoa(x.Index) + "]"
-	case *ssa.Global:
-		name, _ := c.globalName(directive.GlobalKey(x.Object().(*types.Var)))
-		return name
-	}
-
-	return "..."
-}
-
-// lastDot returns the index of the last dot of s, or -1.
-func lastDot(s string) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == '.' {
-			return i
-		}
-	}
-
-	return -1
 }

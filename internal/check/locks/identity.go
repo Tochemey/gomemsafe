@@ -283,6 +283,20 @@ func resultOf(v ssa.Value, index int) (ssa.Value, bool) {
 	return nil, false
 }
 
+// refValue returns the value the parameter or result reference ref names: with no args, the
+// parameter of f's function; at a call, the argument, or the result the call extracts. A
+// result no call extracts, or that a deferred call has not yet, names no value.
+func refValue(ref directive.LockRef, args []ssa.Value, result ssa.Value, f *frame) (ssa.Value, bool) {
+	switch {
+	case ref.Kind == directive.LockResult:
+		return resultOf(result, ref.Index)
+	case args == nil:
+		return f.fn.Params[ref.Index], true
+	}
+
+	return args[ref.Index], true
+}
+
 // lockMethod reports whether common calls a method that changes a lock's state: Lock, RLock,
 // Unlock, RUnlock, or gVisor's nested and downgrade forms, on a Mutex, an RWMutex, or through a
 // sync.Locker. It returns the lock and the method's name.

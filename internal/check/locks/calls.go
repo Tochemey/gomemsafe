@@ -32,6 +32,12 @@ import (
 	"github.com/tochemey/gomemsafe/internal/flow"
 )
 
+// refLock is a contract reference with the lock it names.
+type refLock struct {
+	ref directive.LockRef
+	i   int
+}
+
 // call applies a call: of a function literal, which is solved in place; of a lock method; or
 // of a function with a contract, whose preconditions are checked and whose effects applied.
 func (p *locking) call(instr ssa.Instruction, f *frame, state *flow.Bitset) {
@@ -99,80 +105,79 @@ func (p *locking) lockOp(i int, method string, pos token.Pos, state *flow.Bitset
 func (p *locking) contractCall(c *directive.LockContract, fn *types.Func, args []ssa.Value, result ssa.Value, pos token.Pos, f *frame, state *flow.Bitset) {
 	report := p.reporting && p.silent == 0 && !p.c.forced(pos)
 
-	for _, ref := range c.Excludes {
-		if i, ok := p.refIndex(ref, args, result, f, state); ok && !state.Has(p.u.free(i)) && report {
-			p.c.reportCall(pos, fn, p.c.name(p.u, p.u.locks[i]), msgCallHolding, helpUnlockBefore)
+	for _, l := range p.refLocks(c.Excludes, args, result, f, state) {
+		if !state.Has(p.u.free(l.i)) && report {
+			p.c.reportCall(pos, fn, p.c.name(p.u, p.u.locks[l.i]), msgCallHolding, helpUnlockBefore)
 		}
 	}
 
-	for k, ref := range c.HeldOnEntry() {
-		i, ok := p.refIndex(ref, args, result, f, state)
-		if !ok {
-			continue
-		}
-
-		need := p.u.held(i)
-		if ref.Exclusive {
-			need = p.u.excl(i)
-		}
-
-		msg := msgCallWithout
-		if k >= len(c.Requires) {
-			msg = msgCallReleasing
-		}
-
-		switch {
-		case state.Has(need):
-		case p.c.forced(pos):
-			p.lockBits(i, ref.Exclusive, state)
-		case report:
-			p.c.reportCall(pos, fn, p.c.name(p.u, p.u.locks[i]), msg, helpLockBefore)
-		}
+	for _, l := range p.refLocks(c.Requires, args, result, f, state) {
+		p.requireHeld(l, fn, msgCallWithout, pos, report, state)
 	}
 
-	for _, ref := range c.Releases {
-		if i, ok := p.refIndex(ref, args, result, f, state); ok {
-			p.unlockBits(i, state)
-		}
+	released := p.refLocks(c.Releases, args, result, f, state)
+
+	for _, l := range released {
+		p.requireHeld(l, fn, msgCallReleasing, pos, report, state)
 	}
 
-	for _, ref := range c.Acquires {
-		i, ok := p.refIndex(ref, args, result, f, state)
-		if !ok {
-			continue
+	for _, l := range released {
+		p.unlockBits(l.i, state)
+	}
+
+	for _, l := range p.refLocks(c.Acquires, args, result, f, state) {
+		if state.Has(p.u.held(l.i)) && report {
+			p.c.reportCall(pos, fn, p.c.name(p.u, p.u.locks[l.i]), msgCallAcquiring, helpUnlockBefore)
 		}
 
-		if state.Has(p.u.held(i)) && report {
-			p.c.reportCall(pos, fn, p.c.name(p.u, p.u.locks[i]), msgCallAcquiring, helpUnlockBefore)
-		}
-
-		p.lockBits(i, ref.Exclusive, state)
+		p.lockBits(l.i, l.ref.Exclusive, state)
 	}
 }
 
-// refIndex returns the lock the contract reference ref names at a call with args and result,
-// or, with no args, in the function of f itself.
-func (p *locking) refIndex(ref directive.LockRef, args []ssa.Value, result ssa.Value, f *frame, state *flow.Bitset) (int, bool) {
-	var v ssa.Value
+// requireHeld checks that the lock l names is held at a call of fn, in the mode the reference
+// asks; a forced line locks it instead.
+func (p *locking) requireHeld(l refLock, fn *types.Func, msg string, pos token.Pos, report bool, state *flow.Bitset) {
+	need := p.u.held(l.i)
+	if l.ref.Exclusive {
+		need = p.u.excl(l.i)
+	}
 
-	switch ref.Kind {
-	case directive.LockGlobal:
+	switch {
+	case state.Has(need):
+	case p.c.forced(pos):
+		p.lockBits(l.i, l.ref.Exclusive, state)
+	case report:
+		p.c.reportCall(pos, fn, p.c.name(p.u, p.u.locks[l.i]), msg, helpLockBefore)
+	}
+}
+
+// refLocks returns the references of refs with the locks they name at a call with args and
+// result, or, with no args, in the function of f; a reference that names no lock there is
+// left out.
+func (p *locking) refLocks(refs []directive.LockRef, args []ssa.Value, result ssa.Value, f *frame, state *flow.Bitset) []refLock {
+	var out []refLock
+
+	for _, ref := range refs {
+		if i, ok := p.refIndex(ref, args, result, f, state); ok {
+			out = append(out, refLock{ref, i})
+		}
+	}
+
+	return out
+}
+
+// refIndex returns the lock the contract reference ref names at a call with args and result,
+// or, with no args, in the function of f itself. A result lock of a call whose result is not
+// extracted, or of a deferred call, names nothing.
+func (p *locking) refIndex(ref directive.LockRef, args []ssa.Value, result ssa.Value, f *frame, state *flow.Bitset) (int, bool) {
+	if ref.Kind == directive.LockGlobal {
 		i, ok := p.u.lockIndex[key{global: ref.Global}.extend(ref.Path)]
 		return i, ok
-	case directive.LockParam:
-		switch {
-		case args == nil:
-			v = f.fn.Params[ref.Index]
-		case ref.Index < len(args):
-			v = args[ref.Index]
-		default:
-			return 0, false
-		}
-	case directive.LockResult:
-		var ok bool
-		if v, ok = resultOf(result, ref.Index); !ok {
-			return 0, false
-		}
+	}
+
+	v, ok := refValue(ref, args, result, f)
+	if !ok {
+		return 0, false
 	}
 
 	i, ok := p.u.lockIndex[p.u.resolve(v, f, state, nil).extend(ref.Path)]

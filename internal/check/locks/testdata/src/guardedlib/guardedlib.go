@@ -45,6 +45,12 @@ type Counter struct {
 	N int
 }
 
+// Shared is guarded by the package's lock.
+type Shared struct {
+	// +checklocks:Mu
+	Hits int
+}
+
 // Box is a generic guarded box.
 type Box[T any] struct {
 	Mu sync.Mutex
