@@ -87,12 +87,8 @@ func resolveInFields(pass *analysis.Pass, fields []*ast.Field, parts []string) (
 				continue
 			}
 
-			v, ok := pass.TypesInfo.Defs[id].(*types.Var)
-			if !ok {
-				return 0, resolvedLock{}, false
-			}
-
-			lock, ok := resolveFrom(v, parts[1:])
+			// A named parameter or result always defines a variable.
+			lock, ok := resolveFrom(pass.TypesInfo.Defs[id].(*types.Var), parts[1:])
 
 			return index, lock, ok
 		}

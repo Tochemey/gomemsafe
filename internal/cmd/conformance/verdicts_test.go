@@ -61,6 +61,7 @@ func TestVerdictsKeepBreachesAndMalformedAnnotations(t *testing.T) {
 		{Category: "MS403", Posn: "nowhere", Message: "MS403: lost"},
 		{Category: "MS403", Posn: "file:x:1", Message: "MS403: lost"},
 		{Category: "MS403", Posn: "file:1", Message: "MS403: lost"},
+		{Category: "MS403", Posn: "outside.go:1:1", Message: "MS403: not under the corpus"},
 	}
 
 	got := verdicts(diags, dir)

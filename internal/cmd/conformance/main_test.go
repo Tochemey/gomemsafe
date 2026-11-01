@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,14 @@ import (
 	"strings"
 	"testing"
 )
+
+// mainEnv makes a child process of the test binary run main instead of the tests.
+const mainEnv = "GOMEMSAFE_TEST_MAIN"
+
+// failingWriter is a standard output that cannot be written.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("closed") }
 
 // fakeGo is a runner that answers the go commands the conformance run makes, without
 // building or fetching anything: the download points at a corpus under fake's directory, the
@@ -129,6 +138,49 @@ func vetJSON(diags ...string) string {
 
 func diag(category, file string, line int, msg string) string {
 	return `{"category": "` + category + `", "posn": "$DIR/` + file + `:` + strconv.Itoa(line) + `:1", "message": "` + msg + `"}`
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv(mainEnv) != "" {
+		main()
+	}
+
+	os.Exit(m.Run())
+}
+
+func TestMainPrintsUsage(t *testing.T) {
+	out, err := mainCommand(t, "-h").CombinedOutput()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != exitUsage || !strings.Contains(string(out), "Usage of conformance") {
+		t.Fatalf("err = %v, output %q; want exit %d and the usage", err, out, exitUsage)
+	}
+}
+
+// mainCommand runs the test binary as the conformance command, with the coverage of the child
+// collected where the test's own goes.
+func mainCommand(t *testing.T, args ...string) *exec.Cmd {
+	t.Helper()
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(self, args...) //nolint:gosec // G204: the test binary, with test-chosen arguments
+
+	cmd.Env = append(os.Environ(), mainEnv+"=1")
+
+	if testing.CoverMode() != "" {
+		dir := flag.Lookup("test.gocoverdir").Value.String()
+		if dir == "" {
+			dir = t.TempDir()
+		}
+
+		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
+	}
+
+	return cmd
 }
 
 func TestConformAgrees(t *testing.T) {
@@ -253,6 +305,73 @@ func TestConformFailsOnBadDownloadOutputAndMissingFiles(t *testing.T) {
 
 	if err := conform(context.Background(), options{out: filepath.Join(t.TempDir(), "missing", "x.md")}, &bytes.Buffer{}, fake.run); err == nil {
 		t.Error("an unwritable -out did not fail")
+	}
+}
+
+// TestConformFailsOnItsOwnFiles fails the run on each file the command itself handles: the
+// work directory, a corpus file gone missing before the expectations are read, and the output.
+func TestConformFailsOnItsOwnFiles(t *testing.T) {
+	fake := &fakeGo{t: t, corpusDir: corpusWith(t, nil), checklocks: vetJSON(), gomemsafe: vetJSON()}
+
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+
+	if err := conform(context.Background(), options{}, &bytes.Buffer{}, fake.run); err == nil {
+		t.Error("an unusable temporary directory did not fail")
+	}
+
+	t.Setenv("TMPDIR", t.TempDir())
+
+	if err := conform(context.Background(), options{}, failingWriter{}, fake.run); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Errorf("a failing standard output: conform = %v", err)
+	}
+
+	if err := os.Remove(filepath.Join(fake.corpusDir, filepath.FromSlash(testDir), "basics.go")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := conform(context.Background(), options{}, &bytes.Buffer{}, fake.run); err == nil || !strings.Contains(err.Error(), "basics.go") {
+		t.Errorf("a corpus file missing: conform = %v", err)
+	}
+}
+
+// TestPrepareCorpusFailsOnAnUnwritableDirectory makes the corpus directory, then its go.mod,
+// impossible to write.
+func TestPrepareCorpusFailsOnAnUnwritableDirectory(t *testing.T) {
+	fake := &fakeGo{t: t, corpusDir: corpusWith(t, nil)}
+
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := prepareCorpus(context.Background(), filepath.Join(file, "corpus"), fake.run); err == nil {
+		t.Error("a corpus directory under a file did not fail")
+	}
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "go.mod"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := prepareCorpus(context.Background(), dir, fake.run); err == nil {
+		t.Error("a go.mod that is a directory did not fail")
+	}
+}
+
+func TestCopyGoFilesFailsOnAnUnreadableFile(t *testing.T) {
+	src := t.TempDir()
+	if err := os.Symlink(filepath.Join(src, "missing"), filepath.Join(src, "broken.go")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyGoFiles(src, t.TempDir()); err == nil {
+		t.Fatal("a Go file that cannot be read did not fail")
+	}
+}
+
+func TestReadExpectationsNeedsEveryFile(t *testing.T) {
+	if _, err := readExpectations(t.TempDir()); err == nil {
+		t.Fatal("a corpus without its files did not fail")
 	}
 }
 

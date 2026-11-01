@@ -247,19 +247,15 @@ func prepareCorpus(ctx context.Context, dir string, run runner) error {
 }
 
 // copyGoFiles copies the Go files under src to dst, keeping the directory layout. The module
-// cache is read-only, so the copies are writable.
+// cache is read-only, so the copies are writable. The walk is over src as a file system, so
+// that every path comes relative to it.
 func copyGoFiles(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(os.DirFS(src), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-
-		target := filepath.Join(dst, rel)
+		target := filepath.Join(dst, path)
 
 		switch {
 		case d.IsDir():
@@ -268,7 +264,7 @@ func copyGoFiles(src, dst string) error {
 			return nil
 		}
 
-		data, err := os.ReadFile(path) //nolint:gosec // G304: a file of the downloaded, checksum-verified corpus
+		data, err := os.ReadFile(filepath.Join(src, path)) //nolint:gosec // G304: a file of the downloaded, checksum-verified corpus
 		if err != nil {
 			return err
 		}

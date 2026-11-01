@@ -170,11 +170,8 @@ func lockTargets(pass *analysis.Pass, file *ast.File) map[*ast.CommentGroup]anno
 			return true
 		}
 
-		st, ok := pass.TypesInfo.TypeOf(ss).Underlying().(*types.Struct)
-		if !ok {
-			return true
-		}
-
+		// A struct type literal always has a struct type: the package type-checked.
+		st := pass.TypesInfo.TypeOf(ss).Underlying().(*types.Struct)
 		i := 0
 
 		for _, f := range ss.Fields.List {

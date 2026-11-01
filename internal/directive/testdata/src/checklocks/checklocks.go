@@ -60,6 +60,16 @@ var notALock int // want `MS000: \+checklocks:first names first, which is not a 
 // +checkatomic
 var atomicGlobal int32 // want `MS000: \+checkatomic is not supported yet by this version of gomemsafe`
 
+// +checklocksread:globalMu
+var readOnGlobal int // want `MS000: \+checklocksread is not valid on readOnGlobal; a field or a variable takes \+checklocks:<lock>`
+
+// +checklocks:globalMu
+// +checklocks:globalMu
+var twiceGlobal int // want `MS000: \+checklocks:globalMu is declared twice on twiceGlobal`
+
+// +checklocks:globalBox.nothere
+var unresolvedGlobalField int // want `MS000: \+checklocks:globalBox.nothere does not resolve to a global lock, for unresolvedGlobalField`
+
 type inner struct {
 	mu sync.Mutex
 }
@@ -124,6 +134,13 @@ type guarded struct {
 
 	// +checklocksreadany
 	readAny int // want `MS000: \+checklocksreadany is not supported yet by this version of gomemsafe`
+}
+
+// withLocker embeds an interface, which promotes no fields, so a name is not found through it.
+type withLocker struct {
+	sync.Locker
+	// +checklocks:missing
+	n int // want `MS000: \+checklocks:missing does not resolve to a field of the struct declaring n, or to a global`
 }
 
 type anonymous struct {
@@ -231,6 +248,21 @@ func excludedAndRequired(g *guarded) {} // want `MS000: g.mu is both required an
 // +checklocksexclude:g.mu
 func excludesTwice(g *guarded) {} // want `MS000: \+checklocks:g.mu is declared twice on excludesTwice`
 
+// +checklocks:mu
+func (*guarded) unnamedReceiver(mu *sync.Mutex) {}
+
+// +checklocks:n.mu
+func notStruct(n int) {} // want `MS000: \+checklocks:n.mu does not resolve to a parameter, a result, or a global of notStruct`
+
+// +checklocks:g.byDoc.mu
+func throughInt(g *guarded) {} // want `MS000: \+checklocks:g.byDoc.mu does not resolve to a parameter, a result, or a global of throughInt`
+
+// +checklocksacquire:absent
+func acquiresAbsent() *sync.Mutex { return nil } // want `MS000: \+checklocks:absent does not resolve to a parameter, a result, or a global of acquiresAbsent`
+
+// +checklocksforce
+func forcedFunc() {} // want `MS000: \+checklocksforce is not valid on a function; use \+checklocks, \+checklocksread, \+checklocksacquire, \+checklocksrelease, \+checklocksexclude, or \+checklocksignore`
+
 func lines(g *guarded) {
 	type local struct {
 		mu sync.Mutex
@@ -242,4 +274,5 @@ func lines(g *guarded) {
 	g.byDoc = 2 // +checklocksignore
 	g.byDoc = 3 // +checklocksfail
 	/* want `MS000: \+checklocks must be in the doc comment of a field, a variable, or a function` */ g.byDoc = 4 // +checklocks:mu
+	/* want `MS000: \+checkatomicignore is not supported yet by this version of gomemsafe` */ g.byDoc = 5 // +checkatomicignore
 }

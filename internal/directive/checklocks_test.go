@@ -58,6 +58,9 @@ func TestGuardsResolveLocks(t *testing.T) {
 		{"trailing", []directive.Guard{{Name: "globalMu", Global: global("globalMu")}}},
 		{"grouped", []directive.Guard{{Name: "globalMu", Global: global("globalMu")}}},
 		{"nested", []directive.Guard{{Name: "globalBox.mu", Global: global("globalBox"), Path: []int{0}}}},
+		{"twiceGlobal", []directive.Guard{{Name: "globalMu", Global: global("globalMu")}}},
+		{"readOnGlobal", nil},
+		{"inner", nil},
 		{"headerFirst", []directive.Guard{{Name: "globalMu", Global: global("globalMu")}}},
 		{"headerBoth", []directive.Guard{
 			{Name: "globalMu", Global: global("globalMu")},
@@ -94,15 +97,15 @@ func TestGuardsResolveLocks(t *testing.T) {
 
 	guarded, locks, contracted := res.LockFacts()
 
-	if got := names(guarded); !strings.HasPrefix(got, "count,first,second,trailing,grouped,nested,headerFirst,headerBoth,byDoc,pair1,pair2,") {
+	if got := names(guarded); !strings.HasPrefix(got, "count,first,second,trailing,grouped,nested,headerFirst,headerBoth,twiceGlobal,byDoc,pair1,pair2,") {
 		t.Errorf("guarded objects start with %s", got)
 	}
 
-	if got := names(locks); got != "mu,globalMu,mu,rw,mu,RWMutex,locker,ptr,mu,mu,mu" {
+	if got := names(locks); got != "mu,globalMu,mu,rw,mu,RWMutex,locker,ptr,mu,mu,mu,mu" {
 		t.Errorf("locks = %s", got)
 	}
 
-	if got := names(contracted); got != "requires,requiresRead,mixed,acquires,releases,acquiresResults,requiresGlobals,ignored,onlyIgnored,twiceOnFunc,requiredAndExcluded,acquiresTwice,excludedAndRequired,excludesTwice" {
+	if got := names(contracted); got != "requires,requiresRead,mixed,acquires,releases,acquiresResults,requiresGlobals,ignored,onlyIgnored,twiceOnFunc,requiredAndExcluded,acquiresTwice,excludedAndRequired,excludesTwice,unnamedReceiver" {
 		t.Errorf("contracted = %s", got)
 	}
 
@@ -161,6 +164,11 @@ func TestLockContracts(t *testing.T) {
 			{Name: "g.mu", Kind: directive.LockParam, Index: 0, Path: []int{0}},
 		}}},
 		{"failOnFunc", nil},
+		{"guarded.unnamedReceiver", &directive.LockContract{Requires: []directive.LockRef{param("mu", 1)}}},
+		{"notStruct", nil},
+		{"throughInt", nil},
+		{"acquiresAbsent", nil},
+		{"forcedFunc", nil},
 		{"lines", nil},
 	} {
 		got, ok := res.LockContractOf(lookup(t, pkg, tc.fn).(*types.Func))
@@ -181,7 +189,7 @@ func TestLockContracts(t *testing.T) {
 
 // TestForcedLinesAreThoseWithForce checks the lines of the fixture's last function: a force
 // forces the assertion on its line, an ignore suppresses MS403 there, checklocks' test marker
-// does nothing, and a misplaced annotation is reported.
+// does nothing, and a misplaced or an unsupported annotation is reported.
 func TestForcedLinesAreThoseWithForce(t *testing.T) {
 	r := analysistest.Run(t, analysistest.TestData(), directive.Analyzer, "checklocks")[0]
 	res := r.Result.(*directive.Result)
@@ -200,7 +208,7 @@ func TestForcedLinesAreThoseWithForce(t *testing.T) {
 		got = append(got, res.Forced(r.Pass.Fset, stmt.Pos()))
 	}
 
-	if want := []bool{true, false, false, false}; !slices.Equal(got, want) {
+	if want := []bool{true, false, false, false, false}; !slices.Equal(got, want) {
 		t.Errorf("Forced on the lines of lines = %v, want %v", got, want)
 	}
 
