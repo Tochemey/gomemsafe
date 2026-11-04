@@ -23,22 +23,24 @@
 // Package directive parses //memsafe: comments and gVisor checklocks annotations, once per
 // package, for every check to share.
 //
-// Five //memsafe: verbs are enforced today. The first is allow:
+// Six //memsafe: verbs are enforced today. The first is allow:
 //
 //	//memsafe:allow MS301[,MS302] <reason>
 //
 // suppresses the named checks on its own line and on the next line, and requires a reason.
-// Three declare a function's contract, in its doc comment:
+// Four declare a function's contract, in its doc comment:
 //
 //	//memsafe:viewof <param>
 //	//memsafe:invalidates <param>
 //	//memsafe:consumes <param>
+//	//memsafe:borrows <param>
 //
 // viewof says that the first result is a view into the parameter, valid until a call ends the
 // parameter's views; invalidates says that a call ends every view of the parameter; consumes
-// says that a call takes ownership of the argument, so the caller must not use it again.
-// Result exposes them as a Contract per function, which the summary analyzer turns into
-// facts. The last, in a type's doc comment, gives the type's values move semantics:
+// says that a call takes ownership of the argument, so the caller must not use it again;
+// borrows says that the function keeps nothing of the argument beyond the call, which MS502
+// checks. Result exposes them as a Contract per function, which the summary analyzer turns
+// into facts. The last, in a type's doc comment, gives the type's values move semantics:
 //
 //	//memsafe:owned
 //
@@ -83,6 +85,7 @@ import (
 
 	"github.com/tochemey/gomemsafe/internal/catalog"
 	"github.com/tochemey/gomemsafe/internal/effect"
+	"github.com/tochemey/gomemsafe/internal/escape"
 	"github.com/tochemey/gomemsafe/internal/vetmode"
 )
 
@@ -110,7 +113,7 @@ var Analyzer = &analysis.Analyzer{
 
 // pendingVerbs are valid directives whose checks are not implemented yet.
 var pendingVerbs = map[string]bool{
-	verbStrict: true, verbForbid: true, verbBorrows: true,
+	verbStrict: true, verbForbid: true,
 }
 
 // Result answers whether a diagnostic is suppressed, what contract a function declares, and
@@ -128,9 +131,9 @@ type Result struct {
 	lock       lockFacts
 }
 
-// Contract is what the //memsafe:viewof, //memsafe:invalidates, and //memsafe:consumes
-// directives in a function's doc comment declare. Argument indexes count the receiver as 0,
-// matching the argument order of an SSA call.
+// Contract is what the //memsafe:viewof, //memsafe:invalidates, //memsafe:consumes, and
+// //memsafe:borrows directives in a function's doc comment declare. Argument indexes count the
+// receiver as 0, matching the argument order of an SSA call.
 type Contract struct {
 	Func *types.Func
 	// View is the view the first result is, for viewof: into the named argument, and ended by
@@ -140,6 +143,8 @@ type Contract struct {
 	Ends effect.ArgSet
 	// Consumes lists the arguments whose ownership a call takes, for consumes.
 	Consumes effect.ArgSet
+	// Borrows lists the arguments the function keeps nothing of beyond the call, for borrows.
+	Borrows effect.ArgSet
 }
 
 type lineKey struct {
@@ -272,7 +277,7 @@ func parse(pass *analysis.Pass, res *Result, c *ast.Comment, doc documented, rep
 		p := pass.Fset.Position(c.Pos())
 		key := lineKey{p.Filename, p.Line}
 		res.allowed[key] = append(res.allowed[key], named...)
-	case verb == verbViewOf || verb == verbInvalidates || verb == verbConsumes:
+	case verb == verbViewOf || verb == verbInvalidates || verb == verbConsumes || verb == verbBorrows:
 		if msg := declareContract(pass, res, verb, strings.TrimSpace(rest), doc.fn); msg != "" {
 			malformed("%s", msg)
 		}
@@ -287,9 +292,9 @@ func parse(pass *analysis.Pass, res *Result, c *ast.Comment, doc documented, rep
 	}
 }
 
-// declareContract adds the viewof, invalidates, or consumes directive of decl, naming param,
-// to decl's contract. It returns what is wrong with the directive, or "" when it is
-// well-formed.
+// declareContract adds the viewof, invalidates, consumes, or borrows directive of decl,
+// naming param, to decl's contract. It returns what is wrong with the directive, or "" when it
+// is well-formed.
 func declareContract(pass *analysis.Pass, res *Result, verb, param string, decl *ast.FuncDecl) string {
 	if decl == nil {
 		return fmt.Sprintf("//memsafe:%s must be in the doc comment of a function or method declaration", verb)
@@ -316,6 +321,12 @@ func declareContract(pass *analysis.Pass, res *Result, verb, param string, decl 
 		contract.Ends |= 1 << uint(arg)
 	case verbConsumes:
 		contract.Consumes |= 1 << uint(arg)
+	case verbBorrows:
+		if msg := borrowable(obj, arg, contract, param); msg != "" {
+			return msg
+		}
+
+		contract.Borrows |= 1 << uint(arg)
 	default:
 		switch {
 		case decl.Type.Results.NumFields() == 0:
@@ -330,6 +341,23 @@ func declareContract(pass *analysis.Pass, res *Result, verb, param string, decl 
 	if !seen {
 		res.contractOf[obj] = contract
 		res.Contracts = append(res.Contracts, contract)
+	}
+
+	return ""
+}
+
+// borrowable returns what is wrong with borrowing argument arg of fn, named param: a value
+// that carries no memory is copied by the call, so there is nothing to keep, and an argument
+// consumed is kept by definition.
+func borrowable(fn *types.Func, arg int, contract *Contract, param string) string {
+	v := argAt(fn.Signature(), arg)
+	if !escape.Shares(v.Type()) {
+		return fmt.Sprintf("//memsafe:borrows names %s, which carries no memory: its type %s is copied by the call",
+			param, types.TypeString(v.Type(), types.RelativeTo(fn.Pkg())))
+	}
+
+	if contract.Consumes.Has(arg) {
+		return fmt.Sprintf("//memsafe:borrows and //memsafe:consumes both name %s of %s", param, fn.Name())
 	}
 
 	return ""
@@ -352,6 +380,19 @@ func declareOwned(pass *analysis.Pass, res *Result, rest string, spec *ast.TypeS
 	}
 
 	return ""
+}
+
+// argAt returns the parameter of sig at call-argument index i, the receiver first.
+func argAt(sig *types.Signature, i int) *types.Var {
+	if sig.Recv() != nil {
+		if i == 0 {
+			return sig.Recv()
+		}
+
+		i--
+	}
+
+	return sig.Params().At(i)
 }
 
 // argIndex returns the call-argument index of the parameter of decl named name, the receiver

@@ -30,6 +30,7 @@ import (
 	"golang.org/x/tools/go/analysis/analysistest"
 	"golang.org/x/tools/go/ssa"
 
+	"github.com/tochemey/gomemsafe/internal/flow"
 	"github.com/tochemey/gomemsafe/internal/lazyssa"
 	"github.com/tochemey/gomemsafe/internal/vetmode"
 )
@@ -51,6 +52,16 @@ func TestStaysSilentOnValuesStillOwned(t *testing.T) {
 }
 
 func TestHonoursSuppressions(t *testing.T) {
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "suppress")
+}
+
+// TestRecordsBudgetHits covers a function abandoned because of the budget: nothing is
+// reported, and the hit is recorded.
+func TestRecordsBudgetHits(t *testing.T) {
+	budget = 1
+
+	t.Cleanup(func() { budget = flow.DefaultBudget })
+
 	analysistest.Run(t, analysistest.TestData(), Analyzer, "suppress")
 }
 

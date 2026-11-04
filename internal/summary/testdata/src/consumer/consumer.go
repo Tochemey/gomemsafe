@@ -26,4 +26,4 @@ package consumer
 // Take takes ownership of b.
 //
 //memsafe:consumes b
-func Take(b []byte) { _ = b } // want Take:`^consumes\(0x1\)$`
+func Take(b []byte) { _ = b } // want Take:`^consumes\(0x1\) retains\(0x1\)$`

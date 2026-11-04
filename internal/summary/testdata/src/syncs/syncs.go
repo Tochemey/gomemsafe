@@ -62,7 +62,7 @@ func (s *server) Lock() { s.mu.Lock() } // want Lock:`^syncs$`
 func (s *server) Unlock() { s.mu.Unlock() }
 
 // Through waits through an interface, which may synchronise.
-func Through(w Waiter) { w.Wait() } // want Through:`^syncs$`
+func Through(w Waiter) { w.Wait() } // want Through:`^retains\(0x1\) syncs$`
 
 // Calls calls a function value, which may synchronise.
 func Calls(f func()) { f() } // want Calls:`^syncs$`

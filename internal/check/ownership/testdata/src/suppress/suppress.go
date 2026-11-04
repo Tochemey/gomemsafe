@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package suppress silences MS501 with a reason.
+// Package suppress silences MS501 and MS502 with a reason.
 package suppress
 
 // Packet is owned.
@@ -33,4 +33,14 @@ func allowed(out chan *Packet, p *Packet) int {
 
 	//memsafe:allow MS501 the receiver only reads the packet, and never before this returns
 	return len(p.body)
+}
+
+var last *Packet
+
+// remembered keeps p, for a reason.
+//
+//memsafe:borrows p
+func remembered(p *Packet) {
+	//memsafe:allow MS502 the last packet is kept for diagnostics only
+	last = p
 }

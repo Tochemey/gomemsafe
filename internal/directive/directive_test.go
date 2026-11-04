@@ -83,25 +83,29 @@ func TestReportsNothingInFactsOnlyRuns(t *testing.T) {
 	}
 }
 
-// TestContractsGiveArgumentIndexes checks the contracts of the well-formed viewof and
-// invalidates directives in the fixture: argument indexes count the receiver as 0, a declared
-// view is ended by every event, and a malformed directive adds nothing.
+// TestContractsGiveArgumentIndexes checks the contracts of the well-formed viewof,
+// invalidates, consumes, and borrows directives in the fixture: argument indexes count the
+// receiver as 0, a declared view is ended by every event, and a malformed directive adds
+// nothing.
 func TestContractsGiveArgumentIndexes(t *testing.T) {
 	r := analysistest.Run(t, analysistest.TestData(), directive.Analyzer, "d")[0]
 	res := r.Result.(*directive.Result)
 
 	view := func(arg int) effect.View { return effect.View{Arg: arg, EndedBy: effect.All} }
 	want := []struct {
-		name           string
-		view           effect.View
-		ends, consumes effect.ArgSet
+		name                    string
+		view                    effect.View
+		ends, consumes, borrows effect.ArgSet
 	}{
-		{"Bytes", view(0), 0, 0},
-		{"Reset", effect.View{}, 1 << 0, 0},
-		{"Swap", view(2), 1<<2 | 1<<3, 0},
-		{"Unnamed", view(1), 0, 0},
-		{"Twice", view(0), 0, 0},
-		{"Consume", effect.View{}, 0, 1 << 1},
+		{"Bytes", view(0), 0, 0, 0},
+		{"Reset", effect.View{}, 1 << 0, 0, 0},
+		{"Swap", view(2), 1<<2 | 1<<3, 0, 0},
+		{"Unnamed", view(1), 0, 0, 0},
+		{"Twice", view(0), 0, 0, 0},
+		{"Consume", effect.View{}, 0, 1 << 1, 0},
+		{"Use", effect.View{}, 0, 0, 1 << 0},
+		{"Lend", effect.View{}, 0, 0, 1<<0 | 1<<2},
+		{"Unborrowable", effect.View{}, 0, 1 << 3, 0},
 	}
 
 	if len(res.Contracts) != len(want) {
@@ -110,9 +114,9 @@ func TestContractsGiveArgumentIndexes(t *testing.T) {
 
 	for i, w := range want {
 		c := res.Contracts[i]
-		if c.Func.Name() != w.name || c.View != w.view || c.Ends != w.ends || c.Consumes != w.consumes {
-			t.Errorf("contract %d = %s %+v %#x %#x, want %s %+v %#x %#x", i, c.Func.Name(), c.View,
-				uint64(c.Ends), uint64(c.Consumes), w.name, w.view, uint64(w.ends), uint64(w.consumes))
+		if c.Func.Name() != w.name || c.View != w.view || c.Ends != w.ends || c.Consumes != w.consumes || c.Borrows != w.borrows {
+			t.Errorf("contract %d = %s %+v %#x %#x %#x, want %s %+v %#x %#x %#x", i, c.Func.Name(), c.View,
+				uint64(c.Ends), uint64(c.Consumes), uint64(c.Borrows), w.name, w.view, uint64(w.ends), uint64(w.consumes), uint64(w.borrows))
 		}
 
 		if got, ok := res.ContractOf(c.Func); !ok || got != c {
@@ -159,6 +163,7 @@ func FuzzDirective(f *testing.F) {
 		"allow MS301 the buffer is copied first", "allow MS301,MS302 two checks", "allow",
 		"allow MS301", "allow MS999 unknown", "allow ,, empty IDs", "allow MS301\ttab",
 		"allow  MS301 two spaces", "owned", "strict", "unknownverb", "", "viewof x", "invalidates x", "consumes x", "owned x",
+		"borrows x",
 	} {
 		f.Add(seed)
 	}

@@ -57,8 +57,8 @@ type LockRef struct {
 
 // LockContract is what the checklocks annotations in a function's doc comment declare.
 type LockContract struct {
-	// Requires lists the locks held on entry and still held on exit: +checklocks and
-	// +checklocksread.
+	// Requires lists the locks held on entry and still held on exit, from the +checklocks
+	// and the +checklocksread annotations.
 	Requires []LockRef
 	// Acquires lists the locks not held on entry and held on exit.
 	Acquires []LockRef

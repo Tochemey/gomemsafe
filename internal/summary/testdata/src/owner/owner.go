@@ -40,4 +40,4 @@ type Plain struct{}
 // Release takes ownership of f.
 //
 //memsafe:consumes f
-func Release(f *Frame) { _ = f } // want Release:`^consumes\(0x1\)$`
+func Release(f *Frame) { _ = f } // want Release:`^consumes\(0x1\) retains\(0x1\)$`

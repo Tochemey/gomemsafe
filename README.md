@@ -23,6 +23,7 @@ collector. It runs as a `go vet` tool, with zero runtime cost and no language ch
 | **MS402** | A map a goroutine captures, written on one side and read or written on the other with no synchronisation between them, which the runtime may end with a fatal `concurrent map writes` |
 | **MS403** | A lock contract broken, read from gVisor checklocks' annotations unchanged: a field or a global accessed without holding its `// +checklocks:mu` lock, a function called or returning against its `+checklocks`, `+checklocksacquire`, `+checklocksrelease`, or `+checklocksexclude` annotations, or a lock locked while held or unlocked while not. The verdicts agree with checklocks' own test cases |
 | **MS501** | A value used after its ownership moved: an `//memsafe:owned` value sent on a channel or stored into another owner, or a value passed to a `//memsafe:consumes` parameter |
+| **MS502** | A `//memsafe:borrows` parameter kept beyond the call: stored into memory the function did not allocate, sent, appended, handed to a goroutine, returned, or passed to a callee that keeps it, in any package |
 
 Every check, with its exact rules and its limits, is defined in the
 [check catalogue](docs/design.md#5-check-catalogue). Changes are listed in
@@ -89,7 +90,7 @@ func (b *Buffer) Reset() { b.b = b.b[:0] }
 a call ends every view of it. Callers in any package then get `MS302` for `v := buf.Bytes();
 buf.Reset(); use(v)`.
 
-The last two declare ownership, for MS501:
+The next two declare ownership, for MS501:
 
 ```go
 // Frame is held by one owner at a time.
@@ -105,9 +106,23 @@ func Release(f *Frame) { pool.Put(f) }
 
 `owned` gives a type move semantics: sending a `Frame` on a channel, or storing it into another
 owned value, moves it. `consumes` says that a call takes ownership of the named argument.
-Either way, the caller gets `MS501` for using the value again: `out <- f; f.data[0] = 1`. The
-other directives are recognised, but reported as `MS000: not supported yet`, so a contract that
-nothing checks never looks checked.
+Either way, the caller gets `MS501` for using the value again: `out <- f; f.data[0] = 1`.
+
+The last declares a borrow, for MS502:
+
+```go
+// Write sends p and keeps nothing of it.
+//
+//memsafe:borrows p
+func (c *Conn) Write(p []byte) error { c.last = p; return nil } // MS502: p escapes Write
+```
+
+`borrows` says that the function keeps nothing of the named parameter beyond the call: storing
+it, sending it, handing it to a goroutine, returning it, or passing it to a callee that keeps it
+is `MS502`. What callees keep is read from their summaries in any package, so a helper that
+stores its argument is found through its fact, and a helper that declares `borrows` is
+trusted. The other directives are recognised, but reported as `MS000: not supported yet`, so a
+contract that nothing checks never looks checked.
 
 With `-unsafeflow.safety`, every `unsafe` operation needs a `// SAFETY:` comment on the line
 above its statement, saying why it is safe:
