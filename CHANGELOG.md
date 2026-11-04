@@ -17,6 +17,7 @@
 - MS000 reports a checklocks annotation that is malformed, or one gomemsafe does not check yet (`+checkatomic`, `+checklocksreadany`, `+checklocksalias`).
 - MS501 reports a value used after its ownership moved: an `//memsafe:owned` value sent on a channel or stored into another owner, or a value passed to a `//memsafe:consumes` parameter, in any package.
 - MS502 reports a `//memsafe:borrows` parameter kept beyond the call: stored into memory the function did not allocate, sent, appended, handed to a goroutine, returned, passed to `panic`, or passed to a callee that keeps it, in any package.
+- MS503 reports an owned or borrowed slice used after an append on a prefix of the same backing array may have overwritten it, such as `b := append(a[:i], x)` followed by `use(a)`; `-ownership.appendalias` checks every slice. The in-place filter of a range loop stays silent.
 - Summaries record which arguments a function keeps beyond the call and which its results share, computed from every function's body and read in any package; the `io` interfaces, `context.Context`, the `fmt` printers, `sort.Slice`, and `encoding/json` are known to keep nothing.
 - MS000 reports a `//memsafe:` directive that is malformed or not supported.
 - Findings name and point at the value used, including in assignments, composite literals, conversions, returns, channel sends, `select` cases, `range` loops, and `go` and `defer` calls.

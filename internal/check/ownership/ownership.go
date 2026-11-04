@@ -21,8 +21,7 @@
 // SOFTWARE.
 
 // Package ownership is the family of Tier 2 checks on ownership, MS501 to MS503, which fire
-// only on code annotated with //memsafe:owned, //memsafe:consumes, or //memsafe:borrows. MS501
-// and MS502 are implemented.
+// only on code annotated with //memsafe:owned, //memsafe:consumes, or //memsafe:borrows.
 //
 // MS501 is a value used after its ownership moved: a value of an owned type, or a pointer to
 // one, sent on a channel or stored into another owner, or any value passed to a consuming
@@ -47,6 +46,13 @@
 // interface methods and function values says. Package escape finds the escapes, in the
 // function and in the function literals that captured the parameter, on any path; file
 // borrows.go reports them, once per parameter and line.
+//
+// MS503 is a slice used after an append on a prefix of the same backing array may have
+// overwritten it, as in b := append(a[:i], x); use(a). It follows owned slices and the slices
+// a borrows contract names, and every slice with -ownership.appendalias. File overwrites.go
+// finds the appends and the slices that may share their backing array, and solves which uses
+// may follow such an append on some path, like MS501; file filters.go keeps the in-place
+// filter of a range loop silent; file appends.go reports.
 package ownership
 
 import (
@@ -60,6 +66,7 @@ import (
 
 	"github.com/tochemey/gomemsafe/internal/catalog"
 	"github.com/tochemey/gomemsafe/internal/directive"
+	"github.com/tochemey/gomemsafe/internal/effect"
 	"github.com/tochemey/gomemsafe/internal/flow"
 	"github.com/tochemey/gomemsafe/internal/lazyssa"
 	"github.com/tochemey/gomemsafe/internal/locate"
@@ -91,7 +98,8 @@ var Analyzer = &analysis.Analyzer{
 	Name: "ownership",
 	Doc: "reports uses of a value after its ownership moved (MS501): an //memsafe:owned value sent " +
 		"on a channel or stored into another owner, or a value passed to a //memsafe:consumes parameter; " +
-		"and a //memsafe:borrows parameter that escapes the call (MS502)",
+		"a //memsafe:borrows parameter that escapes the call (MS502); and an owned or borrowed slice used " +
+		"after an append on a prefix of its backing array may have overwritten it (MS503)",
 	Requires: []*analysis.Analyzer{
 		directive.Analyzer, prefilter.Analyzer, lazyssa.Analyzer, summary.Analyzer,
 	},
@@ -129,7 +137,20 @@ func run(pass *analysis.Pass) (any, error) {
 		}
 	}
 
-	if len(funcs) == 0 && len(borrowing) == 0 {
+	borrows := make(map[*types.Func]effect.ArgSet, len(borrowing))
+	for _, contract := range borrowing {
+		borrows[contract.Func] = contract.Borrows
+	}
+
+	var appending []*prefilter.Func
+
+	for _, f := range pre.Funcs {
+		if mayOverwrite(pass.TypesInfo, sum, borrows[f.Obj], f) {
+			appending = append(appending, f)
+		}
+	}
+
+	if len(funcs) == 0 && len(borrowing) == 0 && len(appending) == 0 {
 		return nil, nil
 	}
 
@@ -144,6 +165,12 @@ func run(pass *analysis.Pass) (any, error) {
 
 	for _, contract := range borrowing {
 		c.borrows(ssaRes, contract)
+	}
+
+	for _, f := range appending {
+		if fn := ssaRes.Func(f.Obj); fn != nil {
+			c.appends(fn, f.Decl, borrows[f.Obj])
+		}
 	}
 
 	for range c.eng.BudgetHits {
