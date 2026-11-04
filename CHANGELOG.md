@@ -16,6 +16,8 @@
 - MS403 reports a lock contract broken, read from gVisor checklocks' annotations unchanged: a field or a global accessed without holding its guard, a function called or returning against its lock annotations, or a lock locked while held or unlocked while not. Guards and contracts cross packages through facts. CI checks that the verdicts agree with checklocks' own test cases.
 - MS000 reports a checklocks annotation that is malformed, or one gomemsafe does not check yet (`+checkatomic`, `+checklocksreadany`, `+checklocksalias`).
 - MS501 reports a value used after its ownership moved: an `//memsafe:owned` value sent on a channel or stored into another owner, or a value passed to a `//memsafe:consumes` parameter, in any package.
+- MS502 reports a `//memsafe:borrows` parameter kept beyond the call: stored into memory the function did not allocate, sent, appended, handed to a goroutine, returned, passed to `panic`, or passed to a callee that keeps it, in any package.
+- Summaries record which arguments a function keeps beyond the call and which its results share, computed from every function's body and read in any package; the `io` interfaces, `context.Context`, the `fmt` printers, `sort.Slice`, and `encoding/json` are known to keep nothing.
 - MS000 reports a `//memsafe:` directive that is malformed or not supported.
 - Findings name and point at the value used, including in assignments, composite literals, conversions, returns, channel sends, `select` cases, `range` loops, and `go` and `defer` calls.
 - `//memsafe:allow <checks> <reason>` suppresses findings on its line and the next, with a mandatory reason.

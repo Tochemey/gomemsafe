@@ -27,7 +27,7 @@ The quality bar for gomemsafe. Every change must meet it before it is handed ove
 | Format | Zero unformatted files | No style debates in review | `gofmt`, `goimports` (via golangci-lint) | edit |
 | Vet | Zero `go vet` findings | The Go team's own baseline | `go vet ./...` | edit |
 | Lint | Zero golangci-lint findings | One agreed lint config | `golangci-lint run` | edit |
-| Architecture | Engine packages (`internal/directive`, `prefilter`, `lazyssa`, `flow`, `invalidation`, `summary`, `effect`) never import `internal/check/...` or `internal/frontend` | Keeps the engine reusable by every check family (design §4.1) | golangci-lint `depguard` (`engine-layering`) | edit |
+| Architecture | Engine packages (`internal/directive`, `prefilter`, `lazyssa`, `flow`, `invalidation`, `escape`, `summary`, `effect`) never import `internal/check/...` or `internal/frontend` | Keeps the engine reusable by every check family (design §4.1) | golangci-lint `depguard` (`engine-layering`) | edit |
 | Tests | All tests pass with the race detector on | A memory-safety tool must itself be race-free | `go test -race ./...` | task end |
 | Coverage | **≥ 85%** statement coverage per package in `analyzers/` and `internal/` | Analyzer logic is pure and cheap to test; 85% leaves room for error paths that are hard to trigger | `make test` (merged `-coverpkg` profile); the same profile is uploaded to Codecov for the README badge | task end |
 | Conformance | MS403 gives the same verdict as gVisor checklocks on every line of the compared files of checklocks' own test cases (decision D6) | checklocks-annotated code must work unchanged, and checklocks' tests define what its annotations mean | `make conformance` (`internal/cmd/conformance`) | CI |

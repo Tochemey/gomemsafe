@@ -75,13 +75,13 @@ func Unnamed(int, b *Buffer) []byte { return nil }
 /* want `MS000: //memsafe:invalidates names c, which is not a parameter of Malformed` */ //memsafe:invalidates c
 /* want `MS000: //memsafe:invalidates names _, which is not a parameter of Malformed` */ //memsafe:invalidates _
 /* want `MS000: //memsafe:viewof needs a result to be the view, and Malformed returns nothing` */ //memsafe:viewof b
-func Malformed(b *Buffer, _ int) {}
+func Malformed(b *Buffer, _ int)                                                                  {}
 
 // Twice declares its view twice.
 //
 //memsafe:viewof a
 /* want `MS000: //memsafe:viewof declares the view of Twice twice` */ //memsafe:viewof b
-func Twice(a, b *Buffer) []byte { return nil }
+func Twice(a, b *Buffer) []byte                                       { return nil }
 
 // Frame is owned.
 //
@@ -115,6 +115,29 @@ type Argued struct{}
 //
 //memsafe:consumes f
 func Consume(n int, f *Frame) {}
+
+// Use keeps nothing of f beyond the call.
+//
+//memsafe:borrows f
+func Use(f *Frame) {}
+
+// Lend borrows its receiver and a slice, after an unnamed parameter.
+//
+//memsafe:borrows b
+//memsafe:borrows p
+func (p *Frame) Lend(_ int, b []byte) {}
+
+// Unborrowable borrows values the call copies, and one it consumes.
+//
+/* want `MS000: //memsafe:borrows names n, which carries no memory: its type int is copied by the call` */ //memsafe:borrows n
+/* want `MS000: //memsafe:borrows names s, which carries no memory: its type string is copied by the call` */ //memsafe:borrows s
+/* want `MS000: //memsafe:borrows names v, which carries no memory: its type Vec is copied by the call` */ //memsafe:borrows v
+//memsafe:consumes f
+/* want `MS000: //memsafe:borrows and //memsafe:consumes both name f of Unborrowable` */ //memsafe:borrows f
+func Unborrowable(n int, s string, v Vec, f *Frame)                                      {}
+
+// Vec holds numbers only.
+type Vec struct{ x, y float64 }
 
 // Owner documents a variable.
 //

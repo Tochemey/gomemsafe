@@ -23,14 +23,14 @@
 // Package prefilter makes one cheap pass over a package's syntax and records which static
 // callees each function declaration calls, including calls inside its function literals, and
 // which of them it passes one of its own parameters, whether it calls an interface method or a
-// function value, and whether it communicates on a channel.
-// It also indexes every call by the position
-// of its opening parenthesis, which is the position SSA gives call instructions, so checks can
-// map an SSA call back to its source.
+// function value, whether it communicates on a channel, and where it names a parameter whose
+// memory could leave the function (file escapes.go). It also indexes every call by the
+// position of its opening parenthesis, which is the position SSA gives call instructions, so
+// checks can map an SSA call back to its source.
 //
 // The summary analyzer uses the callees to decide which functions are worth lowering to SSA
 // at all: most functions call nothing that invalidates, makes a view of a parameter, or ends
-// one, and they are never analysed further.
+// one, and keep no parameter, and they are never analysed further.
 package prefilter
 
 import (
@@ -80,6 +80,26 @@ type Func struct {
 	// Communicates reports whether the body sends on or receives from a channel, in a select
 	// or not, including a range over a channel.
 	Communicates bool
+	// ParamStored reports whether the body names a memory-carrying parameter, the receiver
+	// included, where its memory could leave the function by itself: in a return, a send, a go
+	// statement, a composite literal, a function literal, the value or the map key of an
+	// assignment, a variable declaration, a range whose elements carry memory, an address-of,
+	// a call of a builtin that may keep it, or the arguments of a function literal called. A
+	// parameter only read, compared, or written into stays within the call, as does one the
+	// call copies.
+	ParamStored bool
+	// ArgCallees lists the static callees of the calls whose receiver or arguments name a
+	// memory-carrying parameter: what they keep decides whether it escapes.
+	ArgCallees []*types.Func
+	// ResultCallees lists those of ArgCallees whose call's result is used where it could leave
+	// the function: in one of the places ParamStored looks at, or as the receiver or an
+	// argument of another call. Whether the result shares an argument's memory decides
+	// whether the parameter escapes through it.
+	ResultCallees []*types.Func
+	// ParamDynamic reports whether the body calls an interface method or a function value with
+	// a receiver or arguments naming a memory-carrying parameter, unless a known effect says
+	// the method keeps nothing.
+	ParamDynamic bool
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -90,10 +110,15 @@ func run(pass *analysis.Pass) (any, error) {
 
 	seen := make(map[*types.Func]bool)
 	seenWithParam := make(map[*types.Func]bool)
+	seenWithArg := make(map[*types.Func]bool)
+	seenWithResult := make(map[*types.Func]bool)
+	used := make(map[*ast.CallExpr]bool)
 	params := make(map[types.Object]bool)
 
 	nodes := []ast.Node{
 		(*ast.FuncDecl)(nil), (*ast.CallExpr)(nil), (*ast.SendStmt)(nil), (*ast.UnaryExpr)(nil), (*ast.RangeStmt)(nil),
+		(*ast.ReturnStmt)(nil), (*ast.AssignStmt)(nil), (*ast.GoStmt)(nil), (*ast.CompositeLit)(nil), (*ast.FuncLit)(nil),
+		(*ast.ValueSpec)(nil),
 	}
 
 	insp.Preorder(nodes, func(n ast.Node) {
@@ -111,6 +136,9 @@ func run(pass *analysis.Pass) (any, error) {
 
 			clear(seen)
 			clear(seenWithParam)
+			clear(seenWithArg)
+			clear(seenWithResult)
+			clear(used)
 			clear(params)
 			collectParams(pass, n, params)
 		case *ast.CallExpr:
@@ -119,11 +147,17 @@ func run(pass *analysis.Pass) (any, error) {
 				return
 			}
 
+			current.ParamStored = current.ParamStored || namesParam(pass, storedParts(pass, n, used), params, used)
+
 			callee := typeutil.StaticCallee(pass.TypesInfo, n)
 			if callee == nil {
 				current.CallsDynamic = current.CallsDynamic || isDynamic(pass, n)
+				current.ParamDynamic = current.ParamDynamic || mayKeepDynamically(pass, n, params, used)
+
 				return
 			}
+
+			current.addArgCallee(callee, namesParam(pass, callParts(n), params, used), used[n], seenWithArg, seenWithResult)
 
 			if !seen[callee] {
 				seen[callee] = true
@@ -135,9 +169,12 @@ func run(pass *analysis.Pass) (any, error) {
 				current.ParamCallees = append(current.ParamCallees, callee)
 			}
 		default:
-			if current != nil && !current.Communicates && n.Pos() >= current.Decl.Pos() && n.End() <= current.Decl.End() {
-				current.Communicates = communicates(pass, n)
+			if current == nil || n.Pos() < current.Decl.Pos() || n.End() > current.Decl.End() {
+				return
 			}
+
+			current.Communicates = current.Communicates || communicates(pass, n)
+			current.ParamStored = current.ParamStored || namesParam(pass, storedParts(pass, n, used), params, used)
 		}
 	})
 
@@ -145,9 +182,11 @@ func run(pass *analysis.Pass) (any, error) {
 }
 
 // communicates reports whether n, a send, a unary expression, or a range statement, is a channel
-// operation.
+// operation; any other statement is none.
 func communicates(pass *analysis.Pass, n ast.Node) bool {
 	switch n := n.(type) {
+	case *ast.SendStmt:
+		return true
 	case *ast.UnaryExpr:
 		return n.Op == token.ARROW
 	case *ast.RangeStmt:
@@ -155,7 +194,7 @@ func communicates(pass *analysis.Pass, n ast.Node) bool {
 		return isChan
 	}
 
-	return true
+	return false
 }
 
 // isDynamic reports whether call, which has no static callee, calls an interface method or a

@@ -54,6 +54,7 @@ linters:
             - "**/internal/flow/**"
             - "**/internal/summary/**"
             - "**/internal/effect/**"
+            - "**/internal/escape/**"
             - "**/internal/invalidation/**"
           deny:
             - pkg: github.com/tochemey/gomemsafe/internal/check/

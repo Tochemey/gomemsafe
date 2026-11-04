@@ -33,7 +33,7 @@ type Counter struct {
 }
 
 // Use touches the imported objects, so their facts are imported.
-func Use(c *locks.Counter, b *locks.Box[int]) *locks.Box[int] { // want Use:`^syncs$`
+func Use(c *locks.Counter, b *locks.Box[int]) *locks.Box[int] { // want Use:`^returns\(0x2\) syncs$`
 	locks.Mu.Lock()
 	locks.Count++
 	locks.Mu.Unlock()

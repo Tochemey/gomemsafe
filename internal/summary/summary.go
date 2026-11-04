@@ -23,15 +23,18 @@
 // Package summary computes, for every function, what it does to its arguments on every path to
 // a normal return, and exports that as a Fact: the parameters it takes back (MS301), the
 // parameter its first result is a view into, and the events it is on each parameter's buffer
-// (MS302), and the parameters whose ownership it takes (MS501). It also records whether a call
-// of the function may synchronise with another goroutine (MS401), and the lock contract its
-// checklocks annotations declare (MS403). Callers in other packages read the fact instead of
-// the callee's body, the way Rust's borrow checker trusts signatures.
+// (MS302), the parameters whose ownership it takes (MS501), and the parameters whose memory it
+// keeps beyond the call, or shares with a result, on any path (MS502). It also records whether
+// a call of the function may synchronise with another goroutine (MS401), and the lock contract
+// its checklocks annotations declare (MS403). Callers in other packages read the fact instead
+// of the callee's body, the way Rust's borrow checker trusts signatures.
 //
-// A function's contract, declared with //memsafe:viewof, //memsafe:invalidates, and
-// //memsafe:consumes, is part of its fact as declared, whatever its body does; what the summary
-// derives from the body is added to it. Ownership is never derived: only a contract declares
-// it. Known effects (package effect) take precedence over both. A type declared with
+// A function's contract, declared with //memsafe:viewof, //memsafe:invalidates,
+// //memsafe:consumes, and //memsafe:borrows, is part of its fact as declared, whatever its
+// body does; what the summary derives from the body is added to it, except that a borrowed
+// parameter is never kept: callers trust the declaration, and MS502 checks the body. Ownership
+// is never derived: only a contract declares it. Known effects (package effect) take
+// precedence over both. A type declared with
 // //memsafe:owned gets an OwnedFact, so that its values move in every package. A field or a
 // global that checklocks annotations guard, or name as a lock, gets a GuardFact, so that
 // accesses to it are checked in every package.
@@ -69,6 +72,7 @@ import (
 
 	"github.com/tochemey/gomemsafe/internal/directive"
 	"github.com/tochemey/gomemsafe/internal/effect"
+	"github.com/tochemey/gomemsafe/internal/escape"
 	"github.com/tochemey/gomemsafe/internal/flow"
 	"github.com/tochemey/gomemsafe/internal/invalidation"
 	"github.com/tochemey/gomemsafe/internal/lazyssa"
@@ -98,6 +102,11 @@ type Fact struct {
 	Events []effect.Event
 	// Consumes lists the arguments whose ownership the function takes.
 	Consumes effect.ArgSet
+	// Retains lists the arguments whose memory the function may keep beyond the call, outside
+	// its results: stored, sent, started in a goroutine, or passed to a callee that keeps it.
+	Retains effect.ArgSet
+	// Returns lists the arguments whose memory a result may share.
+	Returns effect.ArgSet
 	// Syncs reports whether a call of the function may synchronise with another goroutine. Only
 	// functions that other packages can name, those with exported names, export it.
 	Syncs bool
@@ -141,8 +150,9 @@ func (*OwnedFact) String() string { return "owned" }
 
 // String lists the parts of the summary that are set: invalidates(0x1) for the argument set,
 // viewof(0: 0x7) for a view into argument 0 that events 0x7 end, ends(0: 0x4) for the events
-// on argument 0, consumes(0x2) for the arguments whose ownership the function takes, and syncs
-// for a function that may synchronise.
+// on argument 0, consumes(0x2) for the arguments whose ownership the function takes,
+// retains(0x1) and returns(0x1) for the arguments whose memory it keeps or shares with a
+// result, and syncs for a function that may synchronise.
 func (f *Fact) String() string {
 	var parts []string
 
@@ -168,6 +178,14 @@ func (f *Fact) String() string {
 
 	if f.Consumes != 0 {
 		parts = append(parts, fmt.Sprintf("consumes(%#x)", uint64(f.Consumes)))
+	}
+
+	if f.Retains != 0 {
+		parts = append(parts, fmt.Sprintf("retains(%#x)", uint64(f.Retains)))
+	}
+
+	if f.Returns != 0 {
+		parts = append(parts, fmt.Sprintf("returns(%#x)", uint64(f.Returns)))
 	}
 
 	if f.Syncs {
@@ -229,6 +247,25 @@ func (r *Result) EndsViews(fn *types.Func) bool {
 
 // Consumes returns the call arguments whose ownership a call of fn takes.
 func (r *Result) Consumes(fn *types.Func) effect.ArgSet { return r.factOf(fn).Consumes }
+
+// Retains returns the call arguments whose memory a call of fn may keep beyond the call,
+// outside its results.
+func (r *Result) Retains(fn *types.Func) effect.ArgSet {
+	if retains, _, known := effect.Kept(fn); known {
+		return retains
+	}
+
+	return r.factOf(fn).Retains
+}
+
+// Returns returns the call arguments whose memory a result of fn may share.
+func (r *Result) Returns(fn *types.Func) effect.ArgSet {
+	if _, returns, known := effect.Kept(fn); known {
+		return returns
+	}
+
+	return r.factOf(fn).Returns
+}
 
 // Owned reports whether t is a type whose values move, or a pointer to one: a named type, or an
 // instance of a generic one, declared with //memsafe:owned in any package.
@@ -326,9 +363,12 @@ func (r *Result) factOf(fn *types.Func) Fact {
 
 // candidate reports what is worth computing for f: whether it calls something that invalidates,
 // whether it passes a parameter to something whose result is a view and has a first result that
-// can be one, and whether it passes a parameter to something that ends views. Most functions do
-// none of these and are never lowered to SSA.
-func (r *Result) candidate(f *prefilter.Func) (invalidates, views, events bool) {
+// can be one, whether it passes a parameter to something that ends views, and whether a
+// memory-carrying parameter may leave it: named where the function itself may keep it, passed
+// to an interface method or a function value that may, passed to a callee that keeps or
+// consumes an argument, or passed to a callee that may return its memory, whose result is used
+// where it could leave. Most functions do none of these and are never lowered to SSA.
+func (r *Result) candidate(f *prefilter.Func) (invalidates, views, events, keeps bool) {
 	for _, c := range f.Callees {
 		invalidates = invalidates || r.Invalidates(c) != 0
 	}
@@ -341,7 +381,11 @@ func (r *Result) candidate(f *prefilter.Func) (invalidates, views, events bool) 
 
 	results := f.Obj.Signature().Results()
 
-	return invalidates, views && results.Len() > 0 && invalidation.SharesMemory(results.At(0).Type()), events
+	keeps = f.ParamStored || f.ParamDynamic ||
+		slices.ContainsFunc(f.ArgCallees, func(c *types.Func) bool { return r.Retains(c)|r.Consumes(c) != 0 }) ||
+		slices.ContainsFunc(f.ResultCallees, func(c *types.Func) bool { return r.Returns(c) != 0 })
+
+	return invalidates, views && results.Len() > 0 && invalidation.SharesMemory(results.At(0).Type()), events, keeps
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -388,7 +432,7 @@ func run(pass *analysis.Pass) (any, error) {
 	queued := make(map[*prefilter.Func]bool)
 
 	for _, f := range pre.Funcs {
-		if invalidates, views, events := res.candidate(f); invalidates || views || events {
+		if invalidates, views, events, keeps := res.candidate(f); invalidates || views || events || keeps {
 			work = append(work, f)
 			queued[f] = true
 		}
@@ -442,7 +486,7 @@ func run(pass *analysis.Pass) (any, error) {
 	res.exportGuards()
 
 	for _, f := range pre.Funcs {
-		if invalidates, _, _ := res.candidate(f); invalidates {
+		if invalidates, _, _, _ := res.candidate(f); invalidates {
 			res.Triggered = append(res.Triggered, f)
 		}
 	}
@@ -455,12 +499,14 @@ func run(pass *analysis.Pass) (any, error) {
 func (r *Result) summarize(ssaRes *lazyssa.Result, f *prefilter.Func, dir *directive.Result, eng *flow.Engine) Fact {
 	var fact Fact
 
-	invalidates, views, events := r.candidate(f)
+	invalidates, views, events, keeps := r.candidate(f)
 	if knownViewEffect(f.Obj) {
 		views, events = false, false
 	}
 
-	if fn := ssaRes.Func(f.Obj); fn != nil && len(fn.Params) <= 64 && (invalidates || views || events) {
+	fn := ssaRes.Func(f.Obj)
+
+	if fn != nil && len(fn.Params) <= 64 && (invalidates || views || events) {
 		if invalidates {
 			fact.Invalidates = invalidatedAtReturn(fn, r, eng)
 		}
@@ -472,6 +518,12 @@ func (r *Result) summarize(ssaRes *lazyssa.Result, f *prefilter.Func, dir *direc
 		if events {
 			fact.Events = trimEvents(invalidation.EventsAtReturn(fn, r, eng))
 		}
+	}
+
+	// The escape analysis takes any number of parameters: those it cannot follow escape.
+	if fn != nil && keeps {
+		a := escape.Analyze(fn, r)
+		fact.Retains, fact.Returns = a.Retained(), a.Returned()
 	}
 
 	if c, ok := dir.ContractOf(f.Obj); ok {
@@ -502,14 +554,16 @@ func invalidatedAtReturn(fn *ssa.Function, lookup invalidation.Lookup, eng *flow
 }
 
 // withContract returns fact with the contract c added: the declared view replaces a derived
-// one, every argument c says a call invalidates is all events, and the arguments c says a call
-// consumes are consumed.
+// one, every argument c says a call invalidates is all events, the arguments c says a call
+// consumes are consumed, and kept, and the arguments c says the function borrows are not kept,
+// whatever its body does.
 func withContract(fact Fact, c *directive.Contract) Fact {
 	if c.View.EndedBy != 0 {
 		fact.View = c.View
 	}
 
 	fact.Consumes |= c.Consumes
+	fact.Retains = (fact.Retains | c.Consumes) &^ c.Borrows
 
 	if c.Ends == 0 {
 		return fact
@@ -550,7 +604,8 @@ func trimEvents(events []effect.Event) []effect.Event {
 
 func equal(a, b Fact) bool {
 	return a.Invalidates == b.Invalidates && a.View == b.View && slices.Equal(a.Events, b.Events) &&
-		a.Consumes == b.Consumes && a.Syncs == b.Syncs && a.Locks.Equal(b.Locks)
+		a.Consumes == b.Consumes && a.Retains == b.Retains && a.Returns == b.Returns && a.Syncs == b.Syncs &&
+		a.Locks.Equal(b.Locks)
 }
 
 // knownViewEffect reports whether package effect knows fn's views and events, which then take

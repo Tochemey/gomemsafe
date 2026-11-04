@@ -26,4 +26,4 @@ package consumerclient
 
 import "consumer"
 
-func give(b []byte) { consumer.Take(b) }
+func give(b []byte) { consumer.Take(b) } // want give:`^retains\(0x1\)$`

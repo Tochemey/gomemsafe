@@ -70,6 +70,10 @@ const (
 	// UseAfterMove is a use of a value after its ownership moved: an owned value sent on a
 	// channel or stored into another owner, or any value passed to a consuming parameter.
 	UseAfterMove ID = "MS501"
+	// EscapingBorrow is a parameter a function declares borrowed whose memory it keeps beyond
+	// the call: stored, sent, handed to a goroutine, returned, or passed to a callee that keeps
+	// it.
+	EscapingBorrow ID = "MS502"
 )
 
 // Planned checks. Their IDs are reserved so that code can be annotated ahead of the check.
@@ -78,7 +82,6 @@ const (
 	UseAfterCFree         ID = "MS202"
 	CAllocationLeak       ID = "MS203"
 	EscapingBorrowedView  ID = "MS303"
-	EscapingBorrow        ID = "MS502"
 	AppendAliasing        ID = "MS503"
 	ForbiddenImport       ID = "MS901"
 	UnguardedSharedState  ID = "MS902"

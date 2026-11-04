@@ -32,4 +32,4 @@ var (
 	plain owner.Plain
 )
 
-func release(f *owner.Frame) { owner.Release(f) }
+func release(f *owner.Frame) { owner.Release(f) } // want release:`^retains\(0x1\)$`

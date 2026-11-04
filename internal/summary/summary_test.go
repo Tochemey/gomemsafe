@@ -199,6 +199,60 @@ func TestResultIsSafeForConcurrentLookups(t *testing.T) {
 	wg.Wait()
 }
 
+func TestExportsKeepFacts(t *testing.T) {
+	analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "keeper", "keeperclient")
+}
+
+// TestResultResolvesKeeps resolves what callees keep through the Result: from the body, from a
+// borrows contract, which overrides the body, from facts in another package, and from known
+// effects for the standard library, which take precedence.
+func TestResultResolvesKeeps(t *testing.T) {
+	results := analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "keeper", "keeperclient")
+	keeper := results[0]
+
+	fn := func(name string) *types.Func { return keeper.Pass.Pkg.Scope().Lookup(name).(*types.Func) }
+
+	for _, r := range results {
+		res := r.Result.(*summary.Result)
+
+		for _, tc := range []struct {
+			fn               string
+			retains, returns effect.ArgSet
+		}{
+			{"Keep", 1 << 1, 0},
+			{"Borrow", 0, 0},
+			{"Both", 1 << 1, 1 << 1},
+			{"Count", 0, 0},
+			{"Take", 1 << 0, 0},
+		} {
+			if retains, returns := res.Retains(fn(tc.fn)), res.Returns(fn(tc.fn)); retains != tc.retains || returns != tc.returns {
+				t.Errorf("%s: %s retains %#x, returns %#x; want %#x, %#x", r.Pass.Pkg.Path(), tc.fn,
+					uint64(retains), uint64(returns), uint64(tc.retains), uint64(tc.returns))
+			}
+		}
+	}
+
+	printer := importedFunc(t, keeper.Pass.Pkg, "fmt", "Errorf")
+	if retains, returns := keeper.Result.(*summary.Result).Retains(printer), keeper.Result.(*summary.Result).Returns(printer); retains != 0 || returns != 1<<1 {
+		t.Errorf("fmt.Errorf retains %#x, returns %#x; want 0 and the arguments, from the known effect", uint64(retains), uint64(returns))
+	}
+}
+
+// importedFunc returns the function name of the package path that pkg imports.
+func importedFunc(t *testing.T, pkg *types.Package, path, name string) *types.Func {
+	t.Helper()
+
+	for _, imported := range pkg.Imports() {
+		if imported.Path() == path {
+			return imported.Scope().Lookup(name).(*types.Func)
+		}
+	}
+
+	t.Fatalf("%s does not import %s", pkg.Path(), path)
+
+	return nil
+}
+
 func TestAnnotatedByAConsumingParameterAlone(t *testing.T) {
 	for _, r := range analysistest.Run(t, analysistest.TestData(), summary.Analyzer, "consumer", "consumerclient") {
 		if !r.Result.(*summary.Result).Annotated() {
@@ -236,6 +290,7 @@ func TestFactString(t *testing.T) {
 		{summary.Fact{Consumes: 0b10}, "consumes(0x2)"},
 		{summary.Fact{Syncs: true}, "syncs"},
 		{summary.Fact{Consumes: 0b1, Syncs: true}, "consumes(0x1) syncs"},
+		{summary.Fact{Retains: 0b1, Returns: 0b10}, "retains(0x1) returns(0x2)"},
 		{
 			summary.Fact{Invalidates: 1, View: effect.View{EndedBy: effect.Read}, Events: []effect.Event{effect.Read}},
 			"invalidates(0x1) viewof(0: 0x1) ends(0: 0x1)",

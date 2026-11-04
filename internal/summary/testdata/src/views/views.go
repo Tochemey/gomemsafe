@@ -35,7 +35,7 @@ type Buffer struct{ b []byte }
 // Bytes returns a view of b. A declared view is ended by every event: 0xf.
 //
 //memsafe:viewof b
-func (b *Buffer) Bytes() []byte { return b.b } // want Bytes:`^viewof\(0: 0xf\)$`
+func (b *Buffer) Bytes() []byte { return b.b } // want Bytes:`^viewof\(0: 0xf\) returns\(0x1\)$`
 
 // Reset ends every view of b.
 //
@@ -46,19 +46,19 @@ func (b *Buffer) Reset() { b.b = b.b[:0] } // want Reset:`^ends\(0: 0xf\)$`
 func (b *Buffer) Write(p []byte) { b.b = append(b.b, p...) }
 
 // Contents returns the view bytes.Buffer.Bytes makes, which a read, a write, or a clear ends.
-func Contents(buf *bytes.Buffer) []byte { return buf.Bytes() } // want Contents:`^viewof\(0: 0x7\)$`
+func Contents(buf *bytes.Buffer) []byte { return buf.Bytes() } // want Contents:`^viewof\(0: 0x7\) returns\(0x1\)$`
 
 // Head reslices the view, which keeps it a view.
-func Head(buf *bytes.Buffer) []byte { return buf.Bytes()[:1] } // want Head:`^viewof\(0: 0x7\)$`
+func Head(buf *bytes.Buffer) []byte { return buf.Bytes()[:1] } // want Head:`^viewof\(0: 0x7\) returns\(0x1\)$`
 
 // Through returns another helper's view.
-func Through(buf *bytes.Buffer) []byte { return Contents(buf) } // want Through:`^viewof\(0: 0x7\)$`
+func Through(buf *bytes.Buffer) []byte { return Contents(buf) } // want Through:`^viewof\(0: 0x7\) returns\(0x1\)$`
 
 // Second returns a view into its second argument.
-func Second(_, b *bytes.Buffer) []byte { return b.Bytes() } // want Second:`^viewof\(1: 0x7\)$`
+func Second(_, b *bytes.Buffer) []byte { return b.Bytes() } // want Second:`^viewof\(1: 0x7\) returns\(0x2\)$`
 
 // NilOrView returns nil or a view.
-func NilOrView(buf *bytes.Buffer) []byte { // want NilOrView:`^viewof\(0: 0x7\)$`
+func NilOrView(buf *bytes.Buffer) []byte { // want NilOrView:`^viewof\(0: 0x7\) returns\(0x1\)$`
 	if buf.Len() == 0 {
 		return nil
 	}
@@ -67,7 +67,7 @@ func NilOrView(buf *bytes.Buffer) []byte { // want NilOrView:`^viewof\(0: 0x7\)$
 }
 
 // Merged returns one of two views, ended only by the events that end both: a write.
-func Merged(c bool, buf *bytes.Buffer) []byte { // want Merged:`^viewof\(1: 0x2\)$`
+func Merged(c bool, buf *bytes.Buffer) []byte { // want Merged:`^viewof\(1: 0x2\) returns\(0x2\)$`
 	if c {
 		return buf.Bytes()
 	}
@@ -77,10 +77,10 @@ func Merged(c bool, buf *bytes.Buffer) []byte { // want Merged:`^viewof\(1: 0x2\
 
 // Line returns the view bufio.Reader.ReadSlice makes, and is itself a read on r. It may
 // synchronise: ReadSlice reads from the io.Reader r wraps.
-func Line(r *bufio.Reader) ([]byte, error) { return r.ReadSlice('\n') } // want Line:`^viewof\(0: 0x1\) ends\(0: 0x1\) syncs$`
+func Line(r *bufio.Reader) ([]byte, error) { return r.ReadSlice('\n') } // want Line:`^viewof\(0: 0x1\) ends\(0: 0x1\) returns\(0x1\) syncs$`
 
 // EitherBuffer returns a view into one of two buffers, so it is no view of either.
-func EitherBuffer(c bool, a, b *bytes.Buffer) []byte {
+func EitherBuffer(c bool, a, b *bytes.Buffer) []byte { // want EitherBuffer:`^returns\(0x6\)$`
 	if c {
 		return a.Bytes()
 	}
@@ -125,7 +125,7 @@ func Recycle(buf *bytes.Buffer) { buf.Truncate(0) } // want Recycle:`^ends\(0: 0
 // Window declares its view, which replaces the one its body makes.
 //
 //memsafe:viewof buf
-func Window(buf *bytes.Buffer) []byte { return buf.Bytes() } // want Window:`^viewof\(0: 0xf\)$`
+func Window(buf *bytes.Buffer) []byte { return buf.Bytes() } // want Window:`^viewof\(0: 0xf\) returns\(0x1\)$`
 
 // Swap declares that it ends the views of b, and its body ends some views of a.
 //
@@ -136,7 +136,7 @@ func Swap(a, b *bytes.Buffer) { a.Reset() } // want Swap:`^ends\(0: 0x4, 1: 0xf\
 type Conn struct{ buf bytes.Buffer }
 
 // Bytes returns a view of a field of c, not of c itself, so it gets no fact.
-func (c *Conn) Bytes() []byte { return c.buf.Bytes() }
+func (c *Conn) Bytes() []byte { return c.buf.Bytes() } // want Bytes:`^returns\(0x1\)$`
 
 // Reset clears a field of c, which leaves the views of its other fields valid: no fact.
 func (c *Conn) Reset() { c.buf.Reset() }

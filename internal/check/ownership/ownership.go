@@ -21,7 +21,8 @@
 // SOFTWARE.
 
 // Package ownership is the family of Tier 2 checks on ownership, MS501 to MS503, which fire
-// only on code annotated with //memsafe:owned or //memsafe:consumes. MS501 is implemented.
+// only on code annotated with //memsafe:owned, //memsafe:consumes, or //memsafe:borrows. MS501
+// and MS502 are implemented.
 //
 // MS501 is a value used after its ownership moved: a value of an owned type, or a pointer to
 // one, sent on a channel or stored into another owner, or any value passed to a consuming
@@ -38,6 +39,14 @@
 // literals, nor through calls of interface methods or function values, whose consuming
 // parameters are unknown. Owned types and consuming parameters reach other packages through the
 // summary analyzer's facts.
+//
+// MS502 is a borrowed parameter escaping the call: memory reachable from a parameter that
+// //memsafe:borrows names is kept beyond the call, stored into memory the function did not
+// allocate, sent, appended, handed to a goroutine, returned, passed to panic, or passed to a
+// callee that keeps it, as its summary, a consuming parameter, or the conservative default for
+// interface methods and function values says. Package escape finds the escapes, in the
+// function and in the function literals that captured the parameter, on any path; file
+// borrows.go reports them, once per parameter and line.
 package ownership
 
 import (
@@ -74,11 +83,15 @@ const (
 	unknownValueText = "value"
 )
 
+// budget bounds the dataflow work per function, for tests to lower.
+var budget = flow.DefaultBudget
+
 // Analyzer is the ownership check.
 var Analyzer = &analysis.Analyzer{
 	Name: "ownership",
 	Doc: "reports uses of a value after its ownership moved (MS501): an //memsafe:owned value sent " +
-		"on a channel or stored into another owner, or a value passed to a //memsafe:consumes parameter",
+		"on a channel or stored into another owner, or a value passed to a //memsafe:consumes parameter; " +
+		"and a //memsafe:borrows parameter that escapes the call (MS502)",
 	Requires: []*analysis.Analyzer{
 		directive.Analyzer, prefilter.Analyzer, lazyssa.Analyzer, summary.Analyzer,
 	},
@@ -103,31 +116,34 @@ func run(pass *analysis.Pass) (any, error) {
 	}
 
 	sum := pass.ResultOf[summary.Analyzer].(*summary.Result)
-	if !sum.Annotated() {
-		return nil, nil
-	}
-
 	pre := pass.ResultOf[prefilter.Analyzer].(*prefilter.Result)
+	borrowing := borrowed(pass.ResultOf[directive.Analyzer].(*directive.Result))
 
 	var funcs []*prefilter.Func
 
-	for _, f := range pre.Funcs {
-		if mayMove(pass.TypesInfo, sum, f) {
-			funcs = append(funcs, f)
+	if sum.Annotated() {
+		for _, f := range pre.Funcs {
+			if mayMove(pass.TypesInfo, sum, f) {
+				funcs = append(funcs, f)
+			}
 		}
 	}
 
-	if len(funcs) == 0 {
+	if len(funcs) == 0 && len(borrowing) == 0 {
 		return nil, nil
 	}
 
 	ssaRes := pass.ResultOf[lazyssa.Analyzer].(*lazyssa.Result)
-	c := &checker{pass: pass, sum: sum, loc: locate.New(pass, pre.Calls), calls: pre.Calls}
+	c := &checker{pass: pass, sum: sum, loc: locate.New(pass, pre.Calls), calls: pre.Calls, eng: flow.Engine{Budget: budget}}
 
 	for _, f := range funcs {
 		if fn := ssaRes.Func(f.Obj); fn != nil {
 			c.function(fn)
 		}
+	}
+
+	for _, contract := range borrowing {
+		c.borrows(ssaRes, contract)
 	}
 
 	for range c.eng.BudgetHits {

@@ -173,6 +173,16 @@ only until `p` is invalidated (`Buffer.Bytes`). The function as a whole carries 
 a call of it may synchronise with another goroutine (MS401). Lock effects (`Acquires`,
 `Releases`, `Requires(mu)`) feed MS403.
 
+Of these, `Retains` is computed today as two sets: `Retains`, the arguments whose memory may be
+kept beyond the call outside its results, and `Returns`, the arguments whose memory a result
+may share. They come from a flow-insensitive escape analysis of the body (`internal/escape`),
+to a fixpoint through callees, are exported like the other parts when not empty, and feed
+MS502. The prefilter decides which functions need the analysis: those that name a
+memory-carrying parameter where its memory could leave by itself, pass one to an interface
+method or a function value, or pass one to a callee whose summary keeps, consumes, or returns
+an argument. A `//memsafe:borrows` contract removes the argument from `Retains` whatever the
+body does: callers trust the declaration, and MS502 checks the body.
+
 When the callee cannot be resolved (an interface method, a function value, reflection), the
 caller uses a **conservative default**: `Retains | Mutates`, without `Consumes` or
 `Invalidates`. If an interface method is annotated, that annotation is the contract, and
@@ -228,7 +238,7 @@ applies, so the command line never mentions tiers.
 | ID | Check | Example |
 |---|---|---|
 | MS501 | Use after move: a value is used after its ownership moved. A value of an `//memsafe:owned` type, or a pointer to one, moves when it is sent on a channel (in a `select`, only when its case runs) or stored into a field, element, or map entry of another owned value, including in a composite literal; any value moves when it is passed to a `//memsafe:consumes` parameter, by a call or a `go` statement, not by a `defer`, which takes it only at the return. As in Rust, a use is reported when the value moved on some path to it, not only on every path, unless the variable was assigned again since. Conversions to other types and interfaces, phis, and the local variable a moved value was loaded from are followed. A copy kept in memory before the move, a variable captured by a function literal, a global, and calls of interface methods or function values are not. A comparison with `nil` is no use. | `out <- f; f.data[0] = 1` |
-| MS502 | A borrowed parameter escapes the call | `//memsafe:borrows p` then `h.raw = p` |
+| MS502 | A borrowed parameter escapes the call: memory reachable from a parameter that `//memsafe:borrows` names is kept beyond the call. It is kept when it is stored into a field, an element, a map, a global, or through a pointer the function did not allocate itself; sent on a channel, in a `select` or not; appended to a slice the function did not make; passed to a goroutine, or captured by a function literal one starts; returned; passed to `panic`; or passed to a callee that keeps it: one whose summary says so, a consuming parameter, or an interface method or function value, which may do anything, unless a known effect says the callee keeps nothing (the `io` interfaces, `context.Context`, the `fmt` printers, `sort.Slice`, `encoding/json`). The memory reachable from the parameter is the parameter and its conversions, its fields and elements and what is loaded through it when that carries memory, phis, the local variables that held it, the allocations the function made that it was stored into, the closures that captured it, and the results of callees whose summary says the result shares the argument's memory. The analysis is flow-insensitive: an escape on any path is reported, and a local variable that held the value is taken to hold it afterwards. Memory the function made, an allocation, a make, a nil slice or map, and the appends, slices, and phis of only such memory, keeps nothing by itself, nor does a variable a function literal assigns, which is followed in the function that made the literal. Memory stored back into memory of its own parameter, as in `h.items = append(h.items, h.t)`, reaches nothing new; stored into memory that may be another parameter's, it escapes. An `error` loaded from a parameter's memory is taken to be a value of its own, so `return w.Flush()` is no escape of `w`. Only functions with a `borrows` contract are analysed, so unannotated code never reports. | `//memsafe:borrows p` then `h.raw = p` |
 | MS503 | `append` aliasing: a slice is reused after `append` on a shared prefix of the same backing array. Applies to owned or borrowed slices; enable `-ownership.appendalias` to check every slice. | `b := append(a[:i], x); use(a)` |
 
 ### Tier 3 — Strict package mode
@@ -257,7 +267,7 @@ code works unchanged.
 | Type | `//memsafe:owned` | Values have move semantics: a send on a channel, or a store into another owner, moves them (MS501) |
 | Field | `// +checklocks:<lock>` *(checklocks syntax)* | Access requires holding the named lock |
 | Func | `//memsafe:consumes <param>` | Ownership of the argument moves to the callee: the caller must not use it again (MS501) |
-| Func | `//memsafe:borrows <param>` | The parameter must not escape the call |
+| Func | `//memsafe:borrows <param>` | The function keeps nothing of the parameter beyond the call (MS502). The parameter must carry memory: a pointer, slice, map, channel, function, interface, or a struct or array holding one |
 | Func | `//memsafe:viewof <param>` | The first result is a view into the parameter, valid until a call ends the parameter's views: one that `invalidates` declares, or any call the standard library documents as ending views of it (MS302) |
 | Func | `//memsafe:invalidates <param>` | A call ends every outstanding view of the parameter (MS302) |
 | Func | `// +checklocks:<lock>` / `+checklocksread` / `+checklocksacquire` / `+checklocksrelease` / `+checklocksexclude` *(checklocks syntax)* | Lock contract |
@@ -418,6 +428,16 @@ These are stated plainly so that users know what a clean run does *not* prove.
   are reported as not supported rather than checked.
 - Generic functions are summarised once over their generic body, with type parameters treated
   conservatively.
+- MS502 and the kept-argument summaries are flow-insensitive and conservative: a value that
+  escapes on one path escapes, a local variable that once held a borrowed value is taken to
+  hold it afterwards, and a call of an interface method or a function value keeps every
+  argument that carries memory unless a known effect says otherwise, so a borrowed value
+  handed to an unannotated interface is reported rather than trusted. A function with no body,
+  implemented in assembly, keeps nothing, and an `error` loaded from a parameter's memory is
+  taken to share none of it, as errors are values by convention: an error that hides the
+  parameter's buffer is missed. Within those rules both miss nothing, at the price of reports
+  that a reviewer may judge safe and suppress. Summarising what every function keeps lowers
+  most packages, dependencies included, to SSA.
 - MS301 tracks only values that share memory with the callee: pointers, slices (reslices
   included), maps, channels, functions, unsafe pointers, and interfaces. Values the call copies
   (numbers, strings, structs and arrays passed by value) cannot be invalidated and are not

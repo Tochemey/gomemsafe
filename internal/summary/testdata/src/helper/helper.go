@@ -37,23 +37,23 @@ type Owner struct{}
 func Get() *bytes.Buffer { return pool.Get().(*bytes.Buffer) } // want Get:`^syncs$`
 
 // Release returns b to the pool on every path, and clears it first, which ends its views.
-func Release(b *bytes.Buffer) { // want Release:`^invalidates\(0x1\) ends\(0: 0x4\)$`
+func Release(b *bytes.Buffer) { // want Release:`^invalidates\(0x1\) ends\(0: 0x4\) retains\(0x1\)$`
 	b.Reset()
 	pool.Put(b)
 }
 
 // ReleaseTwice calls Release, so it also invalidates its argument and ends its views.
-func ReleaseTwice(b *bytes.Buffer) { Release(b) } // want ReleaseTwice:`^invalidates\(0x1\) ends\(0: 0x4\)$`
+func ReleaseTwice(b *bytes.Buffer) { Release(b) } // want ReleaseTwice:`^invalidates\(0x1\) ends\(0: 0x4\) retains\(0x1\)$`
 
 // MaybeRelease returns b to the pool on some paths only, so it gets no summary.
-func MaybeRelease(c bool, b *bytes.Buffer) {
+func MaybeRelease(c bool, b *bytes.Buffer) { // want MaybeRelease:`^retains\(0x2\)$`
 	if c {
 		pool.Put(b)
 	}
 }
 
 // Close returns b to the pool. The receiver is argument 0, so b is argument 1.
-func (*Owner) Close(b *bytes.Buffer) { pool.Put(b) } // want Close:`^invalidates\(0x2\)$`
+func (*Owner) Close(b *bytes.Buffer) { pool.Put(b) } // want Close:`^invalidates\(0x2\) retains\(0x2\)$`
 
 // Pooled is a buffer that returns itself to its pool.
 type Pooled struct{ bytes.Buffer }
@@ -64,13 +64,13 @@ var pooled = sync.Pool{New: func() any { return new(Pooled) }}
 func GetPooled() *Pooled { return pooled.Get().(*Pooled) } // want GetPooled:`^syncs$`
 
 // Release returns the receiver itself to the pool: argument 0.
-func (p *Pooled) Release() { pooled.Put(p) } // want Release:`^invalidates\(0x1\)$`
+func (p *Pooled) Release() { pooled.Put(p) } // want Release:`^invalidates\(0x1\) retains\(0x1\)$`
 
 // Pool mirrors go.uber.org/zap/internal/pool: a generic wrapper around sync.Pool.
 type Pool[T any] struct{ pool sync.Pool }
 
 // Put returns x to the pool: argument 1, after the receiver.
-func (p *Pool[T]) Put(x T) { p.pool.Put(x) } // want Put:`^invalidates\(0x2\)$`
+func (p *Pool[T]) Put(x T) { p.pool.Put(x) } // want Put:`^invalidates\(0x2\) retains\(0x1\)$`
 
 // Buffer mirrors zap's buffer.Buffer, which frees itself through a generic pool.
 type Buffer struct{ bs []byte }
@@ -93,7 +93,8 @@ func Recycle[T any](x T) { // want Recycle:`^invalidates\(0x1\)$`
 }
 
 // ReleaseFirstOfMany returns its first argument to the pool, but a fact has one bit per
-// argument and it has 65, so it gets no summary.
-func ReleaseFirstOfMany(b *bytes.Buffer, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ int) {
+// argument and it has 65, so its invalidation is not summarised; what it keeps is, as every
+// argument that carries memory, since the escape analysis cannot follow them all.
+func ReleaseFirstOfMany(b *bytes.Buffer, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ int) { // want ReleaseFirstOfMany:`^retains\(0x1\)$`
 	pool.Put(b)
 }
