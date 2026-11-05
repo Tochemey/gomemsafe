@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package suppress silences MS501 and MS502 with a reason.
+// Package suppress silences MS501, MS502, and MS503 with a reason.
 package suppress
 
 // Packet is owned.
@@ -43,4 +43,17 @@ var last *Packet
 func remembered(p *Packet) {
 	//memsafe:allow MS502 the last packet is kept for diagnostics only
 	last = p
+}
+
+// Frame is owned.
+//
+//memsafe:owned
+type Frame []byte
+
+// trimmed reads only the first byte after the append, which writes at the second.
+func trimmed(f Frame) byte {
+	_ = append(f[:1], 'x')
+
+	//memsafe:allow MS503 the append writes f[1] and only f[0] is read
+	return f[0]
 }

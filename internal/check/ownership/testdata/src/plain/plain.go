@@ -20,9 +20,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package plain sends and stores values but annotates nothing, so MS501 builds no SSA for it.
-// The values are the function's own, not a parameter's, so the summary analyzer builds none
-// for what a function keeps either.
+// Package plain sends and stores values, and appends to a prefix of a slice, but annotates
+// nothing, so MS501 and MS503 build no SSA for it. The values are the function's own, not a
+// parameter's, so the summary analyzer builds none for what a function keeps either.
 package plain
 
 type node struct{ next *node }
@@ -31,4 +31,11 @@ func send(out chan *node) {
 	n := &node{}
 	out <- n
 	n.next = &node{}
+}
+
+func overwrite() int {
+	a := make([]int, 4)
+	_ = append(a[:2], 1)
+
+	return a[2]
 }

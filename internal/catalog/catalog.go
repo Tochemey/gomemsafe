@@ -74,6 +74,9 @@ const (
 	// the call: stored, sent, handed to a goroutine, returned, or passed to a callee that keeps
 	// it.
 	EscapingBorrow ID = "MS502"
+	// AppendAliasing is a slice used after an append on a prefix of the same backing array may
+	// have overwritten it.
+	AppendAliasing ID = "MS503"
 )
 
 // Planned checks. Their IDs are reserved so that code can be annotated ahead of the check.
@@ -82,7 +85,6 @@ const (
 	UseAfterCFree         ID = "MS202"
 	CAllocationLeak       ID = "MS203"
 	EscapingBorrowedView  ID = "MS303"
-	AppendAliasing        ID = "MS503"
 	ForbiddenImport       ID = "MS901"
 	UnguardedSharedState  ID = "MS902"
 	UnspecificSuppression ID = "MS903"

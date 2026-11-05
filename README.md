@@ -24,6 +24,7 @@ collector. It runs as a `go vet` tool, with zero runtime cost and no language ch
 | **MS403** | A lock contract broken, read from gVisor checklocks' annotations unchanged: a field or a global accessed without holding its `// +checklocks:mu` lock, a function called or returning against its `+checklocks`, `+checklocksacquire`, `+checklocksrelease`, or `+checklocksexclude` annotations, or a lock locked while held or unlocked while not. The verdicts agree with checklocks' own test cases |
 | **MS501** | A value used after its ownership moved: an `//memsafe:owned` value sent on a channel or stored into another owner, or a value passed to a `//memsafe:consumes` parameter |
 | **MS502** | A `//memsafe:borrows` parameter kept beyond the call: stored into memory the function did not allocate, sent, appended, handed to a goroutine, returned, or passed to a callee that keeps it, in any package |
+| **MS503** | An owned or borrowed slice used after an append on a prefix of its backing array may have overwritten it: `b := append(a[:i], x)` then `use(a)`. `-ownership.appendalias` checks every slice |
 
 Every check, with its exact rules and its limits, is defined in the
 [check catalogue](docs/design.md#5-check-catalogue). Changes are listed in

@@ -39,7 +39,7 @@
 // parameter's views; invalidates says that a call ends every view of the parameter; consumes
 // says that a call takes ownership of the argument, so the caller must not use it again;
 // borrows says that the function keeps nothing of the argument beyond the call, which MS502
-// checks. Result exposes them as a Contract per function, which the summary analyzer turns
+// checks, and MS503 follows a borrowed slice for appends that overwrite it. Result exposes them as a Contract per function, which the summary analyzer turns
 // into facts. The last, in a type's doc comment, gives the type's values move semantics:
 //
 //	//memsafe:owned
