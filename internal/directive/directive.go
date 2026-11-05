@@ -28,7 +28,7 @@
 //	//memsafe:allow MS301[,MS302] <reason>
 //
 // suppresses the named checks on its own line and on the next line, and requires a reason.
-// Four declare a function's contract, in its doc comment:
+// Four declare a contract, in the doc comment of a function, a method, or an interface method:
 //
 //	//memsafe:viewof <param>
 //	//memsafe:invalidates <param>
@@ -39,8 +39,11 @@
 // parameter's views; invalidates says that a call ends every view of the parameter; consumes
 // says that a call takes ownership of the argument, so the caller must not use it again;
 // borrows says that the function keeps nothing of the argument beyond the call, which MS502
-// checks, and MS503 follows a borrowed slice for appends that overwrite it. Result exposes them as a Contract per function, which the summary analyzer turns
-// into facts. The last, in a type's doc comment, gives the type's values move semantics:
+// checks, and MS503 follows a borrowed slice for appends that overwrite it. Result exposes them
+// as a Contract per function, which the summary analyzer turns into facts. An interface method's
+// contract binds its calls and its implementations, and names only parameters, as an interface
+// method has no receiver to name. The last, in a type's doc comment, gives the type's values
+// move semantics:
 //
 //	//memsafe:owned
 //
@@ -90,6 +93,10 @@ import (
 )
 
 const prefix = "//memsafe:"
+
+// msgBorrowedAndConsumed is what is wrong with a contract whose directives, in either order, both
+// borrow and consume a parameter.
+const msgBorrowedAndConsumed = "//memsafe:borrows and //memsafe:consumes both name %s of %s"
 
 // The verbs of the directive language.
 const (
@@ -152,10 +159,17 @@ type lineKey struct {
 	line int
 }
 
-// documented is the declaration a doc comment belongs to: a function, a type, or neither.
+// documented is the declaration a doc comment belongs to: a function, an interface method, a
+// type, or neither.
 type documented struct {
 	fn  *ast.FuncDecl
 	typ *ast.TypeSpec
+}
+
+// IsInterfaceMethod reports whether fn is a method of an interface, which has no body.
+func IsInterfaceMethod(fn *types.Func) bool {
+	recv := fn.Signature().Recv()
+	return recv != nil && types.IsInterface(recv.Type())
 }
 
 // ContractOf returns the contract that fn's doc comment declares, if it declares one.
@@ -208,9 +222,9 @@ func run(pass *analysis.Pass) (any, error) {
 	return res, nil
 }
 
-// docTargets maps each doc comment of file to the function or type declaration it documents.
-// A type's doc comment is its spec's, or, in a declaration of one type without parentheses,
-// the declaration's.
+// docTargets maps each doc comment of file to the function, interface method, or type
+// declaration it documents. A type's doc comment is its spec's, or, in a declaration of one type
+// without parentheses, the declaration's.
 func docTargets(file *ast.File) map[*ast.CommentGroup]documented {
 	docs := make(map[*ast.CommentGroup]documented)
 
@@ -230,14 +244,37 @@ func docTargets(file *ast.File) map[*ast.CommentGroup]documented {
 			}
 
 			for _, spec := range d.Specs {
-				if ts := spec.(*ast.TypeSpec); ts.Doc != nil {
+				ts := spec.(*ast.TypeSpec)
+				if ts.Doc != nil {
 					docs[ts.Doc] = documented{typ: ts}
 				}
+
+				addInterfaceMethods(docs, ts)
 			}
 		}
 	}
 
 	return docs
+}
+
+// addInterfaceMethods maps the doc comment of each method ts declares, if ts is an interface, to
+// the method written as a declaration with an unnamed receiver, so that its arguments count the
+// receiver as a method declaration's do. An embedded interface or a type term declares no method.
+func addInterfaceMethods(docs map[*ast.CommentGroup]documented, ts *ast.TypeSpec) {
+	iface, ok := ts.Type.(*ast.InterfaceType)
+	if !ok {
+		return
+	}
+
+	for _, field := range iface.Methods.List {
+		if field.Doc != nil && len(field.Names) > 0 {
+			docs[field.Doc] = documented{fn: &ast.FuncDecl{
+				Recv: &ast.FieldList{List: []*ast.Field{{Type: ts.Name}}},
+				Name: field.Names[0],
+				Type: field.Type.(*ast.FuncType),
+			}}
+		}
+	}
 }
 
 // parse records the directive c, which is in the doc comment of doc's declaration.
@@ -297,7 +334,7 @@ func parse(pass *analysis.Pass, res *Result, c *ast.Comment, doc documented, rep
 // is well-formed.
 func declareContract(pass *analysis.Pass, res *Result, verb, param string, decl *ast.FuncDecl) string {
 	if decl == nil {
-		return fmt.Sprintf("//memsafe:%s must be in the doc comment of a function or method declaration", verb)
+		return fmt.Sprintf("//memsafe:%s must be in the doc comment of a function, a method, or an interface method", verb)
 	}
 
 	if param == "" || strings.ContainsAny(param, " \t") {
@@ -320,6 +357,10 @@ func declareContract(pass *analysis.Pass, res *Result, verb, param string, decl 
 	case verbInvalidates:
 		contract.Ends |= 1 << uint(arg)
 	case verbConsumes:
+		if contract.Borrows.Has(arg) {
+			return fmt.Sprintf(msgBorrowedAndConsumed, param, obj.Name())
+		}
+
 		contract.Consumes |= 1 << uint(arg)
 	case verbBorrows:
 		if msg := borrowable(obj, arg, contract, param); msg != "" {
@@ -357,7 +398,7 @@ func borrowable(fn *types.Func, arg int, contract *Contract, param string) strin
 	}
 
 	if contract.Consumes.Has(arg) {
-		return fmt.Sprintf("//memsafe:borrows and //memsafe:consumes both name %s of %s", param, fn.Name())
+		return fmt.Sprintf(msgBorrowedAndConsumed, param, fn.Name())
 	}
 
 	return ""

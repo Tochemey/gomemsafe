@@ -33,7 +33,8 @@
 // function did not make, sent on a channel, appended to such a slice, passed to a goroutine or
 // captured by a function literal one starts, returned, passed to panic, or passed to a callee
 // that keeps it: one whose summary says so, a consuming parameter, or an interface method or
-// function value, which may do anything, unless a known effect says it keeps nothing.
+// function value, which may do anything, unless a known effect says it keeps nothing or an
+// interface method's contract borrows the argument.
 //
 // Memory the function made is an allocation, a make, a nil slice or map, and the slices,
 // appends, and phis of only such values: storing into it keeps nothing beyond the call by

@@ -88,12 +88,13 @@ var hows = map[escape.Kind]string{
 	escape.CapturedByWideLiteral: howWideLiteral,
 }
 
-// borrowed returns the contracts of this package that borrow a parameter, in source order.
+// borrowed returns the contracts of this package that borrow a parameter of a function with a
+// body, in source order. An interface method has none: its implementations answer for it.
 func borrowed(dir *directive.Result) []*directive.Contract {
 	var out []*directive.Contract
 
 	for _, c := range dir.Contracts {
-		if c.Borrows != 0 {
+		if c.Borrows != 0 && !directive.IsInterfaceMethod(c.Func) {
 			out = append(out, c)
 		}
 	}

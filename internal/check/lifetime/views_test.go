@@ -145,3 +145,9 @@ func ssaBuilds(t *testing.T, pkg string) int64 {
 
 	return lazyssa.Builds() - before
 }
+
+// TestFollowsViewsThroughInterfaceContracts covers views made and ended by calls of interface
+// methods, directly and through functions whose summaries read the contracts.
+func TestFollowsViewsThroughInterfaceContracts(t *testing.T) {
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "viewscontract")
+}

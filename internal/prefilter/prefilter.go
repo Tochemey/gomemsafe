@@ -21,8 +21,8 @@
 // SOFTWARE.
 
 // Package prefilter makes one cheap pass over a package's syntax and records which static
-// callees each function declaration calls, including calls inside its function literals, and
-// which of them it passes one of its own parameters, whether it calls an interface method or a
+// callees and interface methods each function declaration calls, including calls inside its
+// function literals, and which of them it passes one of its own parameters, whether it calls an interface method or a
 // function value, whether it communicates on a channel, and where it names a parameter whose
 // memory could leave the function (file escapes.go). It also indexes every call by the
 // position of its opening parenthesis, which is the position SSA gives call instructions, so
@@ -48,7 +48,7 @@ import (
 // Analyzer computes a Result for each package.
 var Analyzer = &analysis.Analyzer{
 	Name:       "prefilter",
-	Doc:        "records the static callees of every function declaration",
+	Doc:        "records the static callees and interface methods each function declaration calls",
 	Requires:   []*analysis.Analyzer{inspect.Analyzer},
 	Run:        run,
 	ResultType: reflect.TypeFor[*Result](),
@@ -63,11 +63,13 @@ type Result struct {
 	Calls map[token.Pos]*ast.CallExpr
 }
 
-// Func is one function declaration and the static callees in its body, including the bodies
-// of the function literals it contains.
+// Func is one function declaration and the callees in its body, including the bodies of the
+// function literals it contains.
 type Func struct {
-	Obj     *types.Func
-	Decl    *ast.FuncDecl
+	Obj  *types.Func
+	Decl *ast.FuncDecl
+	// Callees lists the static callees, and the interface methods called, whose contracts bind
+	// those calls.
 	Callees []*types.Func
 	// ParamCallees lists the callees that a call passes one of the declaration's parameters, the
 	// receiver included: as an argument, or as the receiver of a method declared on the
@@ -154,20 +156,17 @@ func run(pass *analysis.Pass) (any, error) {
 				current.CallsDynamic = current.CallsDynamic || isDynamic(pass, n)
 				current.ParamDynamic = current.ParamDynamic || mayKeepDynamically(pass, n, params, used)
 
+				// A call with no static callee that names a function calls an interface method,
+				// which ParamDynamic already answers for keeping what it is passed.
+				if method, isMethod := typeutil.Callee(pass.TypesInfo, n).(*types.Func); isMethod {
+					current.addCallee(pass, method, n, params, seen, seenWithParam)
+				}
+
 				return
 			}
 
 			current.addArgCallee(callee, namesParam(pass, callParts(n), params, used), used[n], seenWithArg, seenWithResult)
-
-			if !seen[callee] {
-				seen[callee] = true
-				current.Callees = append(current.Callees, callee)
-			}
-
-			if !seenWithParam[callee] && passesParam(pass, n, params) {
-				seenWithParam[callee] = true
-				current.ParamCallees = append(current.ParamCallees, callee)
-			}
+			current.addCallee(pass, callee, n, params, seen, seenWithParam)
 		default:
 			if current == nil || n.Pos() < current.Decl.Pos() || n.End() > current.Decl.End() {
 				return
@@ -179,6 +178,19 @@ func run(pass *analysis.Pass) (any, error) {
 	})
 
 	return res, nil
+}
+
+// addCallee records that call calls callee, and passes it a parameter if it does.
+func (f *Func) addCallee(pass *analysis.Pass, callee *types.Func, call *ast.CallExpr, params map[types.Object]bool, seen, seenWithParam map[*types.Func]bool) {
+	if !seen[callee] {
+		seen[callee] = true
+		f.Callees = append(f.Callees, callee)
+	}
+
+	if !seenWithParam[callee] && passesParam(pass, call, params) {
+		seenWithParam[callee] = true
+		f.ParamCallees = append(f.ParamCallees, callee)
+	}
 }
 
 // communicates reports whether n, a send, a unary expression, or a range statement, is a channel

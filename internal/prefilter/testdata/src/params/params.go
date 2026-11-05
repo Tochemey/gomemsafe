@@ -68,3 +68,9 @@ func local() { // want `with parameters: `
 func inLiteral(b *Buf) { // want `with parameters: params.take`
 	func() { take(b) }()
 }
+
+type taker interface{ Take(b *Buf) }
+
+func passesToInterface(t taker, b *Buf) { // want `with parameters: \(params.taker\).Take`
+	t.Take(b)
+}

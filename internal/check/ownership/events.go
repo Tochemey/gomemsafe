@@ -81,9 +81,9 @@ func (m *moves) addMoves(instr ssa.Instruction, sum contracts) {
 }
 
 // consumerMoves records a move of each argument that call passes to a consuming parameter of
-// its static callee.
+// its static callee, or of the interface method it calls.
 func (m *moves) consumerMoves(call ssa.CallInstruction, sum contracts) {
-	callee, ok := staticCallee(call.Common())
+	callee, args, ok := invalidation.Callee(call.Common())
 	if !ok {
 		return
 	}
@@ -93,7 +93,7 @@ func (m *moves) consumerMoves(call ssa.CallInstruction, sum contracts) {
 		return
 	}
 
-	for i, arg := range call.Common().Args {
+	for i, arg := range args {
 		if !consumes.Has(i) || isNil(arg) {
 			continue
 		}
@@ -243,33 +243,6 @@ func loadedFrom(v ssa.Value, instr ssa.Instruction) (*ssa.Alloc, bool) {
 	}
 
 	return alloc, loaded
-}
-
-// staticCallee returns the function a call statically dispatches to, when the call's arguments
-// line up with the function's parameters, receiver first: not for a method value, whose
-// wrapper takes no receiver. It mirrors package invalidation's.
-func staticCallee(call *ssa.CallCommon) (*types.Func, bool) {
-	fn := call.StaticCallee()
-	if fn == nil {
-		return nil, false
-	}
-
-	obj, ok := fn.Object().(*types.Func)
-	if !ok || arity(fn.Signature) != arity(obj.Signature()) {
-		return nil, false
-	}
-
-	return obj, true
-}
-
-// arity counts a signature's parameters, the receiver included.
-func arity(sig *types.Signature) int {
-	n := sig.Params().Len()
-	if sig.Recv() != nil {
-		n++
-	}
-
-	return n
 }
 
 // paramAt returns the parameter of fn at call-argument index i, the receiver first.

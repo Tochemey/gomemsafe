@@ -185,9 +185,11 @@ body does: callers trust the declaration, and MS502 checks the body.
 
 When the callee cannot be resolved (an interface method, a function value, reflection), the
 caller uses a **conservative default**: `Retains | Mutates`, without `Consumes` or
-`Invalidates`. If an interface method is annotated, that annotation is the contract, and
-every implementation in the analysed packages is checked against it, the way a trait
-signature binds its impls.
+`Invalidates`. If an interface method is annotated, that annotation is the contract: its fact
+says what the annotation says, calls of the method are checked as if it held, and what it leaves
+out stays at the default, so an argument it does not borrow may be kept. Every type of an analysed
+package that implements the interface is checked against it (MS504), the way a trait signature
+binds its impls.
 
 ## 5. Check catalogue
 
@@ -207,7 +209,7 @@ applies, so the command line never mentions tiers.
 | `lifetime` | MS301–MS303 | 1 | — |
 | `sharing` | MS401–MS402 | 1 | — |
 | `locks` | MS403 | 1, on annotated code | — |
-| `ownership` | MS501–MS503 | 2, on annotated code | `-ownership.appendalias` enables MS503 on unannotated slices |
+| `ownership` | MS501–MS504 | 2, on annotated code | `-ownership.appendalias` enables MS503 on unannotated slices |
 | `strict` | MS901–MS903 | 3, in `//memsafe:strict` packages | — |
 
 ### Tier 1 — Hazards (on by default, no annotations required)
@@ -237,9 +239,10 @@ applies, so the command line never mentions tiers.
 
 | ID | Check | Example |
 |---|---|---|
-| MS501 | Use after move: a value is used after its ownership moved. A value of an `//memsafe:owned` type, or a pointer to one, moves when it is sent on a channel (in a `select`, only when its case runs) or stored into a field, element, or map entry of another owned value, including in a composite literal; any value moves when it is passed to a `//memsafe:consumes` parameter, by a call or a `go` statement, not by a `defer`, which takes it only at the return. As in Rust, a use is reported when the value moved on some path to it, not only on every path, unless the variable was assigned again since. Conversions to other types and interfaces, phis, and the local variable a moved value was loaded from are followed. A copy kept in memory before the move, a variable captured by a function literal, a global, and calls of interface methods or function values are not. A comparison with `nil` is no use. | `out <- f; f.data[0] = 1` |
-| MS502 | A borrowed parameter escapes the call: memory reachable from a parameter that `//memsafe:borrows` names is kept beyond the call. It is kept when it is stored into a field, an element, a map, a global, or through a pointer the function did not allocate itself; sent on a channel, in a `select` or not; appended to a slice the function did not make; passed to a goroutine, or captured by a function literal one starts; returned; passed to `panic`; or passed to a callee that keeps it: one whose summary says so, a consuming parameter, or an interface method or function value, which may do anything, unless a known effect says the callee keeps nothing (the `io` interfaces, `context.Context`, the `fmt` printers, `sort.Slice`, `encoding/json`). The memory reachable from the parameter is the parameter and its conversions, its fields and elements and what is loaded through it when that carries memory, phis, the local variables that held it, the allocations the function made that it was stored into, the closures that captured it, and the results of callees whose summary says the result shares the argument's memory. The analysis is flow-insensitive: an escape on any path is reported, and a local variable that held the value is taken to hold it afterwards. Memory the function made, an allocation, a make, a nil slice or map, and the appends, slices, and phis of only such memory, keeps nothing by itself, nor does a variable a function literal assigns, which is followed in the function that made the literal. Memory stored back into memory of its own parameter, as in `h.items = append(h.items, h.t)`, reaches nothing new; stored into memory that may be another parameter's, it escapes. An `error` loaded from a parameter's memory is taken to be a value of its own, so `return w.Flush()` is no escape of `w`. Only functions with a `borrows` contract are analysed, so unannotated code never reports. | `//memsafe:borrows p` then `h.raw = p` |
+| MS501 | Use after move: a value is used after its ownership moved. A value of an `//memsafe:owned` type, or a pointer to one, moves when it is sent on a channel (in a `select`, only when its case runs) or stored into a field, element, or map entry of another owned value, including in a composite literal; any value moves when it is passed to a `//memsafe:consumes` parameter, by a call or a `go` statement, not by a `defer`, which takes it only at the return. As in Rust, a use is reported when the value moved on some path to it, not only on every path, unless the variable was assigned again since. Conversions to other types and interfaces, phis, and the local variable a moved value was loaded from are followed. An argument passed to a consuming parameter of an interface method moves too. A copy kept in memory before the move, a variable captured by a function literal, a global, and calls of function values or of interface methods with no contract are not. A comparison with `nil` is no use. | `out <- f; f.data[0] = 1` |
+| MS502 | A borrowed parameter escapes the call: memory reachable from a parameter that `//memsafe:borrows` names is kept beyond the call. It is kept when it is stored into a field, an element, a map, a global, or through a pointer the function did not allocate itself; sent on a channel, in a `select` or not; appended to a slice the function did not make; passed to a goroutine, or captured by a function literal one starts; returned; passed to `panic`; or passed to a callee that keeps it: one whose summary says so, a consuming parameter, or an interface method or function value, which may do anything, unless a known effect says the callee keeps nothing (the `io` interfaces, `context.Context`, the `fmt` printers, `sort.Slice`, `encoding/json`) or the interface method's contract borrows that parameter. The memory reachable from the parameter is the parameter and its conversions, its fields and elements and what is loaded through it when that carries memory, phis, the local variables that held it, the allocations the function made that it was stored into, the closures that captured it, and the results of callees whose summary says the result shares the argument's memory. The analysis is flow-insensitive: an escape on any path is reported, and a local variable that held the value is taken to hold it afterwards. Memory the function made, an allocation, a make, a nil slice or map, and the appends, slices, and phis of only such memory, keeps nothing by itself, nor does a variable a function literal assigns, which is followed in the function that made the literal. Memory stored back into memory of its own parameter, as in `h.items = append(h.items, h.t)`, reaches nothing new; stored into memory that may be another parameter's, it escapes. An `error` loaded from a parameter's memory is taken to be a value of its own, so `return w.Flush()` is no escape of `w`. Only functions with a `borrows` contract are analysed, so unannotated code never reports. | `//memsafe:borrows p` then `h.raw = p` |
 | MS503 | `append` aliasing: a slice used after an `append` on a prefix of the same backing array may have overwritten it. An append overwrites when its first argument extends a reslice `x[lo:hi]` whose high bound is given, is not `len(x)`, and is not also its capacity (`x[lo:hi:hi]`, which append copies), directly or through phis, conversions, other appends, and open-ended reslices. The slices that may share the backing array are the reslices of a slice, an append's result and its first argument, phis, and conversions; the append may overwrite each of them but its own first argument. A use is anything but `len`, `cap`, a comparison with `nil`, a conversion, and a reslice made only to append to; a write counts, since it may change the append's result. As for MS501, a use is reported when such an append ran on some path to it since the slice was made. It applies to slices of an `//memsafe:owned` slice type and slice parameters that `//memsafe:borrows` names, and to every slice with `-ownership.appendalias`. The in-place filter of a range loop over a slice, `out := a[:0]` then `out = append(out, x)` for each element kept, is not reported when the loop reads the slice at its index or a constant ahead of it, each append adds one element to the loop's own `out`, and none ran earlier in the iteration: its appends write behind what it reads. A slice loaded again from a field or an element, a reslice made before the append and used after it, an append inside a called function, a slice a function literal captures, which is followed only within the literal, a slice of a type parameter's type, and the elements of an array are not followed. | `b := append(a[:i], x); use(a)` |
+| MS504 | A broken interface contract: a method that implements an interface method with a contract does what the contract rules out for the interface's callers. On a parameter, it consumes one the contract does not consume, takes one back as `sync.Pool.Put` does, ends the views of one the contract does not declare with `invalidates`, keeps or returns one the contract borrows, or returns a view into one the contract neither consumes nor declares with `viewof`. A method may do less than its contract declares: a method of a consuming contract may ignore its argument, and one of a `viewof` contract may return a copy. What it does comes from its summary, its own contract and body alike, in any package. A method promoted from an embedded field is reported at the type, when another package declares it; one promoted from an embedded interface does what that interface's contract declares, and nothing when it has none. | `//memsafe:borrows p` on `Sink.Peek`, and `func (k *K) Peek(p []byte) { k.kept = p }` |
 
 ### Tier 3 — Strict package mode
 
@@ -266,13 +269,24 @@ code works unchanged.
 | Package | `//memsafe:forbid unsafe,cgo` | A narrower form of strict |
 | Type | `//memsafe:owned` | Values have move semantics: a send on a channel, or a store into another owner, moves them (MS501). An owned slice type's values are checked for `append` aliasing (MS503) |
 | Field | `// +checklocks:<lock>` *(checklocks syntax)* | Access requires holding the named lock |
-| Func | `//memsafe:consumes <param>` | Ownership of the argument moves to the callee: the caller must not use it again (MS501) |
-| Func | `//memsafe:borrows <param>` | The function keeps nothing of the parameter beyond the call (MS502), and a borrowed slice is checked for `append` aliasing (MS503). The parameter must carry memory: a pointer, slice, map, channel, function, interface, or a struct or array holding one |
-| Func | `//memsafe:viewof <param>` | The first result is a view into the parameter, valid until a call ends the parameter's views: one that `invalidates` declares, or any call the standard library documents as ending views of it (MS302) |
-| Func | `//memsafe:invalidates <param>` | A call ends every outstanding view of the parameter (MS302) |
+| Func, interface method | `//memsafe:consumes <param>` | Ownership of the argument moves to the callee: the caller must not use it again (MS501) |
+| Func, interface method | `//memsafe:borrows <param>` | The function keeps nothing of the parameter beyond the call (MS502), and a borrowed slice is checked for `append` aliasing (MS503). The parameter must carry memory: a pointer, slice, map, channel, function, interface, or a struct or array holding one |
+| Func, interface method | `//memsafe:viewof <param>` | The first result is a view into the parameter, valid until a call ends the parameter's views: one that `invalidates` declares, or any call the standard library documents as ending views of it (MS302) |
+| Func, interface method | `//memsafe:invalidates <param>` | A call ends every outstanding view of the parameter (MS302) |
 | Func | `// +checklocks:<lock>` / `+checklocksread` / `+checklocksacquire` / `+checklocksrelease` / `+checklocksexclude` *(checklocks syntax)* | Lock contract |
 | Line | `//memsafe:allow MS301[,MS302] <reason>` | Suppression on the same or the next line. The reason (rest of the line) is mandatory. |
 | Line | `// SAFETY: <why>` | Justifies the `unsafe` operations of the statement on the next line (MS104). The reason is mandatory. |
+
+On an interface method, a contract binds every call of the method and every implementation (MS504):
+
+```go
+type Sink interface {
+	//memsafe:consumes f
+	Write(f *Frame)
+}
+```
+
+An interface method has no receiver name, so its contract names only parameters.
 
 ```go
 // Buffer is a reusable byte buffer drawn from a pool.
@@ -432,8 +446,8 @@ These are stated plainly so that users know what a clean run does *not* prove.
 - MS502 and the kept-argument summaries are flow-insensitive and conservative: a value that
   escapes on one path escapes, a local variable that once held a borrowed value is taken to
   hold it afterwards, and a call of an interface method or a function value keeps every
-  argument that carries memory unless a known effect says otherwise, so a borrowed value
-  handed to an unannotated interface is reported rather than trusted. A function with no body,
+  argument that carries memory unless a known effect or its contract says otherwise, so a
+  borrowed value handed to an unannotated interface is reported rather than trusted. A function with no body,
   implemented in assembly, keeps nothing, and an `error` loaded from a parameter's memory is
   taken to share none of it, as errors are values by convention: an error that hides the
   parameter's buffer is missed. Within those rules both miss nothing, at the price of reports
@@ -445,6 +459,18 @@ These are stated plainly so that users know what a clean run does *not* prove.
   filter. Slices that a phi may merge are taken to share one backing array, so two buffers
   swapped in a loop are reported. With `-ownership.appendalias` these are reports a reviewer
   may judge safe and suppress.
+- Interface contracts (MS504) compare summaries, so they rule out what those can see: an
+  implementation's breach within the limits above is missed, and one flagged by the summary's
+  conservative defaults is reported. A contract cannot name the receiver, so views of the receiver
+  are not declared on an interface method and an implementation's receiver is not checked. A method
+  value of an interface is a function value, whose contract is not followed. An implementation is
+  not checked as if it declared the contract itself: MS503 follows its slice parameter only when
+  the method declares `borrows`. An interface method
+  with no contract rules nothing out, so an implementation that consumes an argument of one is not
+  reported. Only types of the package being analysed are checked, against the interfaces it can
+  see: an implementation in a package that does not depend on the interface's is not, nor is a type
+  a function declares, nor an implementation of a generic interface, though calls of a generic
+  interface's methods are.
 - MS301 tracks only values that share memory with the callee: pointers, slices (reslices
   included), maps, channels, functions, unsafe pointers, and interfaces. Values the call copies
   (numbers, strings, structs and arrays passed by value) cannot be invalidated and are not
@@ -462,7 +488,7 @@ These are stated plainly so that users know what a clean run does *not* prove.
 | **M0 — Spike** | Dual-mode binary with the `VetxOnly` short-circuit; `directive`, `prefilter`, `lazyssa`, `flow`, a minimal `summary`; MS301 end to end; benchmark harness in CI | Budgets in §7.1 measured; the SSA share in §11 evaluated; decisions.md updated if a decision changes |
 | **M1 — Unsafe, cgo, lifetimes** | MS101–MS104, MS201–MS203, MS301–MS303, known effects for the standard library | Zero false positives on the corpus at default settings, or each one triaged and fixed |
 | **M2 — Summaries and sharing** | `summary` facts, MS401–MS403 (checklocks-compatible) | Determinism test for facts; warm-edit budget met; checklocks conformance run in CI |
-| **M3 — Ownership** | MS501–MS503, interface contracts | Sound on an annotated test corpus (mutation-tested) |
+| **M3 — Ownership** | MS501–MS504, interface contracts | Sound on an annotated test corpus (mutation-tested) |
 | **M4 — Polish** | Strict mode, golangci-lint module plugin, SARIF, docs site | First tagged release |
 
 ## 11. Facts the design relies on

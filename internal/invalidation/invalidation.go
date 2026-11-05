@@ -62,8 +62,8 @@ import (
 	"github.com/tochemey/gomemsafe/internal/flow"
 )
 
-// Lookup resolves what a static callee does to its call arguments, receiver first for
-// methods: from known effects, directives, and summaries.
+// Lookup resolves what a static callee or an interface method does to its call arguments,
+// receiver first for methods: from known effects, directives, and summaries.
 type Lookup interface {
 	// Invalidates returns the call arguments the callee takes back.
 	Invalidates(fn *types.Func) effect.ArgSet
@@ -319,14 +319,37 @@ func (a *Analysis) InvalidAtReturn() []bool {
 	return out
 }
 
+// Callee returns the function whose summary describes a call, and the call's arguments, lined
+// up with that function's parameters, receiver first: the interface method a call dispatches
+// through, or the function it statically calls. The arguments do not line up for a method value:
+// its SSA wrapper reports the method as its object but takes no receiver (see ssa.createBound),
+// so such calls are skipped.
+func Callee(call *ssa.CallCommon) (*types.Func, []ssa.Value, bool) {
+	if call.IsInvoke() {
+		return call.Method, append([]ssa.Value{call.Value}, call.Args...), true
+	}
+
+	fn := call.StaticCallee()
+	if fn == nil {
+		return nil, nil, false
+	}
+
+	obj, ok := fn.Object().(*types.Func)
+	if !ok || arity(fn.Signature) != arity(obj.Signature()) {
+		return nil, nil, false
+	}
+
+	return obj, call.Args, true
+}
+
 func newAnalysis(fn *ssa.Function) *Analysis {
 	return &Analysis{Fn: fn, classOf: make(map[ssa.Value]int), siteOf: make(map[*ssa.Call][]int)}
 }
 
-// addSite records call as a site if its static callee invalidates any non-constant argument
+// addSite records call as a site if its callee invalidates any non-constant argument
 // that shares memory with the caller.
 func (a *Analysis) addSite(call *ssa.Call, lookup Lookup) {
-	callee, ok := staticCallee(call)
+	callee, callArgs, ok := Callee(call.Common())
 	if !ok {
 		return
 	}
@@ -340,7 +363,7 @@ func (a *Analysis) addSite(call *ssa.Call, lookup Lookup) {
 
 	var classes []int
 
-	for i, arg := range call.Common().Args {
+	for i, arg := range callArgs {
 		if !bits.Has(i) {
 			continue
 		}
@@ -428,24 +451,6 @@ func (a *Analysis) nearestSite(c int, pos token.Pos) (int, int, bool) {
 	}
 
 	return best, bestArg, true
-}
-
-// staticCallee returns the function a call statically dispatches to, when the call's
-// arguments line up with the function's parameters, receiver first. They do not for a method
-// value: its SSA wrapper reports the method as its object but takes no receiver (see
-// ssa.createBound), so such calls are skipped.
-func staticCallee(call *ssa.Call) (*types.Func, bool) {
-	fn := call.Common().StaticCallee()
-	if fn == nil {
-		return nil, false
-	}
-
-	obj, ok := fn.Object().(*types.Func)
-	if !ok || arity(fn.Signature) != arity(obj.Signature()) {
-		return nil, false
-	}
-
-	return obj, true
 }
 
 // arity counts a signature's parameters, the receiver included.

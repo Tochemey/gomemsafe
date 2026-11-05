@@ -47,3 +47,9 @@ func helper() {} // want `callees: `
 func dynamic(f func()) { // want `callees: `
 	f()
 }
+
+type walker interface{ Walk() }
+
+func callsInterface(w walker) { // want `callees: \(p.walker\).Walk`
+	w.Walk()
+}

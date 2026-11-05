@@ -211,12 +211,12 @@ func eventsOnParams(calls []*ssa.Call, params map[ssa.Value]int, lookup Lookup) 
 	out := make(map[*ssa.Call][]paramEvent)
 
 	for _, call := range calls {
-		callee, ok := staticCallee(call)
+		callee, args, ok := Callee(call.Common())
 		if !ok {
 			continue
 		}
 
-		for i, arg := range call.Common().Args {
+		for i, arg := range args {
 			param, followed := params[Base(arg)]
 			if !followed {
 				continue

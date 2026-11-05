@@ -51,8 +51,11 @@ const varargsComment = "varargs"
 type callee struct {
 	retains, returns, consumes effect.ArgSet
 	// unknown is set when the callee may do anything: an interface method with no known
-	// effect, a function value, or a goroutine.
+	// effect and no contract, a function value, or a goroutine.
 	unknown bool
+	// undeclared is set when the callee keeps what it retains only because its contract says
+	// nothing about it: an interface method with a contract, whose body is unknown.
+	undeclared bool
 }
 
 // use follows the memory v carries, of the roots in bits, into its use by instr: into another
@@ -209,9 +212,8 @@ func (a *Analysis) called(instr ssa.CallInstruction, v ssa.Value, bits uint64) {
 
 	if common.IsInvoke() {
 		args := append([]ssa.Value{common.Value}, common.Args...)
-		retains, returns, known := effect.Kept(common.Method)
 
-		a.passed(instr, common.Method, args, v, bits, callee{retains: retains, returns: returns, unknown: !known})
+		a.passed(instr, common.Method, args, v, bits, a.invoked(common.Method))
 
 		return
 	}
@@ -254,6 +256,22 @@ func (a *Analysis) called(instr ssa.CallInstruction, v ssa.Value, bits uint64) {
 	}
 }
 
+// invoked returns what interface method fn does with its arguments: from a known effect, from
+// its contract, or anything at all. A contract's Retains is never empty, as it holds the receiver,
+// so an empty one means that the method has none.
+func (a *Analysis) invoked(fn *types.Func) callee {
+	if retains, returns, known := effect.Kept(fn); known {
+		return callee{retains: retains, returns: returns}
+	}
+
+	retains := a.lookup.Retains(fn)
+	if retains == 0 {
+		return callee{unknown: true}
+	}
+
+	return callee{retains: retains, returns: a.lookup.Returns(fn), consumes: a.lookup.Consumes(fn), undeclared: true}
+}
+
 // calleeOf returns what fn does with its arguments: from its summary for a declared function
 // whose arguments line up with its parameters, or else from its body, for a function literal
 // or a synthetic wrapper, which has no summary of its own.
@@ -290,6 +308,8 @@ func (a *Analysis) passed(instr ssa.CallInstruction, fn *types.Func, args []ssa.
 			kind = PassedToConsumer
 		case !c.retains.Has(i):
 			escapes = false
+		case c.undeclared:
+			kind = PassedToUnknown
 		}
 
 		if escapes {

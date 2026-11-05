@@ -317,6 +317,53 @@ func analyze(t *testing.T, pkg *ssa.Package, name string) *invalidation.Analysis
 	return a
 }
 
+// TestCalleeLinesUpArguments checks the callee and the arguments of each kind of call: receiver
+// first through an interface and on a concrete method, and none for a function value or a method
+// value, whose arguments do not line up with any declared function.
+func TestCalleeLinesUpArguments(t *testing.T) {
+	pkg := buildSource(t, `package p
+
+type I interface{ M(a int) }
+
+type T struct{}
+
+func (T) M(a int) {}
+
+func invoke(i I)        { i.M(1) }
+func static(t T)        { t.M(1) }
+func value(f func(int)) { f(1) }
+func bound(t T)         { m := t.M; m(1) }
+`)
+
+	for _, tc := range []struct {
+		fn, callee string
+		args       int
+	}{
+		{"invoke", "(p.I).M", 2},
+		{"static", "(p.T).M", 2},
+		{"value", "", 0},
+		{"bound", "", 0},
+	} {
+		var call *ssa.Call
+
+		for _, instr := range pkg.Func(tc.fn).Blocks[0].Instrs {
+			if c, isCall := instr.(*ssa.Call); isCall {
+				call = c
+			}
+		}
+
+		callee, args, ok := invalidation.Callee(call.Common())
+		if ok != (tc.callee != "") {
+			t.Errorf("%s: resolved = %v", tc.fn, ok)
+			continue
+		}
+
+		if ok && (callee.FullName() != tc.callee || len(args) != tc.args) {
+			t.Errorf("%s: callee %s with %d arguments, want %s with %d", tc.fn, callee.FullName(), len(args), tc.callee, tc.args)
+		}
+	}
+}
+
 func build(t *testing.T) *ssa.Package {
 	t.Helper()
 

@@ -73,13 +73,12 @@ func (a *Analysis) addViews(calls []*ssa.Call, lookup Lookup) {
 	a.viewClasses = make(map[int]viewClass)
 
 	for _, call := range calls {
-		callee, ok := staticCallee(call)
+		callee, args, ok := Callee(call.Common())
 		if !ok {
 			continue
 		}
 
 		view, isView := lookup.ViewOf(callee)
-		args := call.Common().Args
 
 		if !isView || view.Arg >= len(args) || isConst(args[view.Arg]) {
 			continue
@@ -107,12 +106,12 @@ func (a *Analysis) endViews(calls []*ssa.Call, lookup Lookup) {
 	a.resolveViews()
 
 	for _, call := range calls {
-		callee, ok := staticCallee(call)
+		callee, args, ok := Callee(call.Common())
 		if !ok {
 			continue
 		}
 
-		for i, arg := range call.Common().Args {
+		for i, arg := range args {
 			events := lookup.EventsOn(callee, i)
 			if events == 0 || isConst(arg) {
 				continue
