@@ -436,13 +436,8 @@ func (a *aliasing) addOverwrites() {
 // onlyExtends reports whether every use of s is the first argument of an overwriting append.
 func (a *aliasing) onlyExtends(s *ssa.Slice) bool {
 	for _, r := range referrersOf(s) {
-		switch x := r.(type) {
-		case *ssa.DebugRef:
-		case *ssa.Call:
-			if _, isOverwrite := a.at[x]; !isOverwrite || x.Call.Args[0] != s {
-				return false
-			}
-		default:
+		call, isCall := r.(*ssa.Call)
+		if _, isOverwrite := a.at[call]; !isCall || !isOverwrite || call.Call.Args[0] != s {
 			return false
 		}
 	}
