@@ -106,6 +106,9 @@ func TestContractsGiveArgumentIndexes(t *testing.T) {
 		{"Use", effect.View{}, 0, 0, 1 << 0},
 		{"Lend", effect.View{}, 0, 0, 1<<0 | 1<<2},
 		{"Unborrowable", effect.View{}, 0, 1 << 3, 0},
+		{"Write", effect.View{}, 0, 1 << 1, 0},
+		{"Both", view(2), 0, 0, 1 << 2},
+		{"Unconsumable", effect.View{}, 0, 0, 1 << 0},
 	}
 
 	if len(res.Contracts) != len(want) {
@@ -126,6 +129,20 @@ func TestContractsGiveArgumentIndexes(t *testing.T) {
 
 	if _, ok := res.ContractOf(r.Pass.Pkg.Scope().Lookup("Malformed").(*types.Func)); ok {
 		t.Error("Malformed has a contract; its directives are all malformed")
+	}
+}
+
+// TestIsInterfaceMethodTellsThemFromMethods checks an interface method, a concrete method, and a
+// function of the fixture.
+func TestIsInterfaceMethodTellsThemFromMethods(t *testing.T) {
+	r := analysistest.Run(t, analysistest.TestData(), directive.Analyzer, "d")[0]
+	res := r.Result.(*directive.Result)
+
+	for _, c := range res.Contracts {
+		want := c.Func.Name() == "Write" || c.Func.Name() == "Both"
+		if got := directive.IsInterfaceMethod(c.Func); got != want {
+			t.Errorf("IsInterfaceMethod(%s) = %v, want %v", c.Func.Name(), got, want)
+		}
 	}
 }
 

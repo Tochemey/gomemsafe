@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package ownership is the family of Tier 2 checks on ownership, MS501 to MS503, which fire
+// Package ownership is the family of Tier 2 checks on ownership, MS501 to MS504, which fire
 // only on code annotated with //memsafe:owned, //memsafe:consumes, or //memsafe:borrows.
 //
 // MS501 is a value used after its ownership moved: a value of an owned type, or a pointer to
@@ -35,9 +35,9 @@
 // It follows a value through the function that holds it: its conversions to other types and
 // interfaces, phis, and the local variable it was loaded from. It does not follow a value
 // through memory, such as a copy kept in a field or a slice before the move, nor into function
-// literals, nor through calls of interface methods or function values, whose consuming
-// parameters are unknown. Owned types and consuming parameters reach other packages through the
-// summary analyzer's facts.
+// literals, nor through calls of function values or of interface methods with no contract, whose
+// consuming parameters are unknown. Owned types and consuming parameters, those of interface
+// methods included, reach other packages through the summary analyzer's facts.
 //
 // MS502 is a borrowed parameter escaping the call: memory reachable from a parameter that
 // //memsafe:borrows names is kept beyond the call, stored into memory the function did not
@@ -53,6 +53,11 @@
 // finds the appends and the slices that may share their backing array, and solves which uses
 // may follow such an append on some path, like MS501; file filters.go keeps the in-place
 // filter of a range loop silent; file appends.go reports.
+//
+// MS504 is a method that breaks the contract of an interface method it implements: callers of
+// the interface rely on the contract alone, so the method must not consume, take back, or end the
+// views of an argument the contract leaves with them, keep one it borrows, or return a view it
+// does not declare. File implementations.go compares the two methods' summaries.
 package ownership
 
 import (
@@ -99,7 +104,8 @@ var Analyzer = &analysis.Analyzer{
 	Doc: "reports uses of a value after its ownership moved (MS501): an //memsafe:owned value sent " +
 		"on a channel or stored into another owner, or a value passed to a //memsafe:consumes parameter; " +
 		"a //memsafe:borrows parameter that escapes the call (MS502); and an owned or borrowed slice used " +
-		"after an append on a prefix of its backing array may have overwritten it (MS503)",
+		"after an append on a prefix of its backing array may have overwritten it (MS503); and a method " +
+		"that breaks the contract of an interface method it implements (MS504)",
 	Requires: []*analysis.Analyzer{
 		directive.Analyzer, prefilter.Analyzer, lazyssa.Analyzer, summary.Analyzer,
 	},
@@ -125,6 +131,9 @@ func run(pass *analysis.Pass) (any, error) {
 
 	sum := pass.ResultOf[summary.Analyzer].(*summary.Result)
 	pre := pass.ResultOf[prefilter.Analyzer].(*prefilter.Result)
+
+	checkImplementations(pass, sum)
+
 	borrowing := borrowed(pass.ResultOf[directive.Analyzer].(*directive.Result))
 
 	var funcs []*prefilter.Func

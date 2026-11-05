@@ -57,3 +57,13 @@ func trimmed(f Frame) byte {
 	//memsafe:allow MS503 the append writes f[1] and only f[0] is read
 	return f[0]
 }
+
+type interfaceContract interface {
+	//memsafe:borrows p
+	Peek(p []byte)
+}
+
+type keepsPeeked struct{ kept []byte }
+
+//memsafe:allow MS504 this method is never called through the interface
+func (k *keepsPeeked) Peek(p []byte) { k.kept = p }

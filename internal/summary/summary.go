@@ -29,6 +29,10 @@
 // its checklocks annotations declare (MS403). Callers in other packages read the fact instead
 // of the callee's body, the way Rust's borrow checker trusts signatures.
 //
+// An interface method's contract is its fact too, so that calls of the method, in any package,
+// read it as they read a function's. It has no body: what the contract leaves out is what an
+// unknown callee may do, and every other part comes from the contract alone.
+//
 // A function's contract, declared with //memsafe:viewof, //memsafe:invalidates,
 // //memsafe:consumes, and //memsafe:borrows, is part of its fact as declared, whatever its
 // body does; what the summary derives from the body is added to it, except that a borrowed
@@ -59,12 +63,10 @@
 package summary
 
 import (
-	"fmt"
 	"go/types"
 	"reflect"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 
 	"golang.org/x/tools/go/analysis"
@@ -89,37 +91,6 @@ var Analyzer = &analysis.Analyzer{
 	ResultType: reflect.TypeFor[*Result](),
 }
 
-// Fact records what a function does to its call arguments, receiver first for methods.
-// Functions with an empty summary get no fact, so the common case costs nothing in the facts
-// file.
-type Fact struct {
-	// Invalidates lists the arguments the function takes back.
-	Invalidates effect.ArgSet
-	// View is the view the first result is; zero when it is none.
-	View effect.View
-	// Events lists, by argument, the events a call is on that argument's buffer. Trailing
-	// arguments with none are left out.
-	Events []effect.Event
-	// Consumes lists the arguments whose ownership the function takes.
-	Consumes effect.ArgSet
-	// Retains lists the arguments whose memory the function may keep beyond the call, outside
-	// its results: stored, sent, started in a goroutine, or passed to a callee that keeps it.
-	Retains effect.ArgSet
-	// Returns lists the arguments whose memory a result may share.
-	Returns effect.ArgSet
-	// Syncs reports whether a call of the function may synchronise with another goroutine. Only
-	// functions that other packages can name, those with exported names, export it.
-	Syncs bool
-	// Locks is the lock contract the function's checklocks annotations declare, if any.
-	Locks *directive.LockContract
-}
-
-// OwnedFact marks a type whose values have move semantics: //memsafe:owned in its doc comment.
-// Only owned types get one, so Owned is always set; gob encodes no struct without a field.
-type OwnedFact struct {
-	Owned bool
-}
-
 // Result is what checks need from the summaries of one package. It implements
 // invalidation.Lookup. The checks that read it run in parallel goroutines, the way unitchecker
 // runs the analyzers of one package, so the caches of imported facts are filled under mu; what
@@ -138,65 +109,10 @@ type Result struct {
 	imported      map[*types.Func]Fact
 	ownedImported map[*types.TypeName]bool
 	guardImported map[types.Object]GuardFact
-}
 
-// AFact implements analysis.Fact.
-func (*Fact) AFact() {}
-
-// AFact implements analysis.Fact.
-func (*OwnedFact) AFact() {}
-
-func (*OwnedFact) String() string { return "owned" }
-
-// String lists the parts of the summary that are set: invalidates(0x1) for the argument set,
-// viewof(0: 0x7) for a view into argument 0 that events 0x7 end, ends(0: 0x4) for the events
-// on argument 0, consumes(0x2) for the arguments whose ownership the function takes,
-// retains(0x1) and returns(0x1) for the arguments whose memory it keeps or shares with a
-// result, and syncs for a function that may synchronise.
-func (f *Fact) String() string {
-	var parts []string
-
-	if f.Invalidates != 0 {
-		parts = append(parts, fmt.Sprintf("invalidates(%#x)", uint64(f.Invalidates)))
-	}
-
-	if f.View.EndedBy != 0 {
-		parts = append(parts, fmt.Sprintf("viewof(%d: %#x)", f.View.Arg, uint8(f.View.EndedBy)))
-	}
-
-	var ends []string
-
-	for i, events := range f.Events {
-		if events != 0 {
-			ends = append(ends, fmt.Sprintf("%d: %#x", i, uint8(events)))
-		}
-	}
-
-	if len(ends) > 0 {
-		parts = append(parts, "ends("+strings.Join(ends, ", ")+")")
-	}
-
-	if f.Consumes != 0 {
-		parts = append(parts, fmt.Sprintf("consumes(%#x)", uint64(f.Consumes)))
-	}
-
-	if f.Retains != 0 {
-		parts = append(parts, fmt.Sprintf("retains(%#x)", uint64(f.Retains)))
-	}
-
-	if f.Returns != 0 {
-		parts = append(parts, fmt.Sprintf("returns(%#x)", uint64(f.Returns)))
-	}
-
-	if f.Syncs {
-		parts = append(parts, "syncs")
-	}
-
-	if !f.Locks.Empty() {
-		parts = append(parts, lockString(f.Locks))
-	}
-
-	return strings.Join(parts, " ")
+	factScan           sync.Once
+	factAnnotated      bool
+	interfaceContracts []*types.Func
 }
 
 // Invalidates returns the call-argument indexes fn invalidates.
@@ -311,18 +227,9 @@ func (r *Result) Annotated() bool {
 		}
 	}
 
-	for _, f := range r.pass.AllObjectFacts() {
-		switch fact := f.Fact.(type) {
-		case *OwnedFact:
-			return true
-		case *Fact:
-			if fact.Consumes != 0 {
-				return true
-			}
-		}
-	}
+	r.scanFacts()
 
-	return false
+	return r.factAnnotated
 }
 
 // Describe words what fn does to the arguments it invalidates, for diagnostics. It is empty for
@@ -400,7 +307,7 @@ func run(pass *analysis.Pass) (any, error) {
 	}
 
 	for _, c := range dir.Contracts {
-		res.local[c.Func] = withContract(Fact{}, c)
+		res.local[c.Func] = contractFact(c)
 	}
 
 	_, _, contracted := dir.LockFacts()
@@ -551,41 +458,6 @@ func invalidatedAtReturn(fn *ssa.Function, lookup invalidation.Lookup, eng *flow
 	}
 
 	return bits
-}
-
-// withContract returns fact with the contract c added: the declared view replaces a derived
-// one, every argument c says a call invalidates is all events, the arguments c says a call
-// consumes are consumed, and kept, and the arguments c says the function borrows are not kept,
-// whatever its body does.
-func withContract(fact Fact, c *directive.Contract) Fact {
-	if c.View.EndedBy != 0 {
-		fact.View = c.View
-	}
-
-	fact.Consumes |= c.Consumes
-	fact.Retains = (fact.Retains | c.Consumes) &^ c.Borrows
-
-	if c.Ends == 0 {
-		return fact
-	}
-
-	events := slices.Clone(fact.Events)
-
-	for i := range 64 {
-		if !c.Ends.Has(i) {
-			continue
-		}
-
-		if i >= len(events) {
-			events = append(events, make([]effect.Event, i+1-len(events))...)
-		}
-
-		events[i] = effect.All
-	}
-
-	fact.Events = events
-
-	return fact
 }
 
 // trimEvents drops the trailing arguments with no events, so that a summary with none has no

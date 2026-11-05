@@ -114,6 +114,17 @@ func keeper(t *T)           { keeps(t) }
 func consumer(t *T)         { takes(t) }
 func unknownFunc(f func(*T), t *T) { f(t) }
 func unknownMethod(s Sink, t *T)    { s.Put(t) }
+
+type Contracts interface{ Contracted(a, b, c *T) }
+
+func contractedBorrow(s Contracts, t *T)  { s.Contracted(t, nil, nil) }
+func contractedConsume(s Contracts, t *T) { s.Contracted(nil, t, nil) }
+func contractedOther(s Contracts, t *T)   { s.Contracted(nil, nil, t) }
+
+type Lender interface{ Lends(a *T) *T }
+
+func lent(s Lender, t *T) *T  { return s.Lends(t) }
+func lentOnly(s Lender, t *T) { s.Lends(t) }
 func knownMethod(r io.Reader, b []byte) { _, _ = r.Read(b) }
 func goMethod(r io.Reader, b []byte)   { go r.Read(b) }
 func panicked(t *T)         { panic(t) }
@@ -247,6 +258,18 @@ func (fakeLookup) Retains(fn *types.Func) effect.ArgSet {
 		return 1 << 0
 	}
 
+	// The fact of an interface method whose contract borrows its first parameter and consumes its
+	// second, with the receiver and the rest kept by default.
+	if fn.Name() == "Contracted" {
+		return 0b1101
+	}
+
+	// The fact of an interface method whose contract borrows its parameter, a view of which is
+	// its result.
+	if fn.Name() == "Lends" {
+		return 0b01
+	}
+
 	return 0
 }
 
@@ -259,12 +282,20 @@ func (fakeLookup) Returns(fn *types.Func) effect.ArgSet {
 		return 1 << 0
 	}
 
+	if fn.Name() == "Lends" {
+		return 1 << 1
+	}
+
 	return 0
 }
 
 func (fakeLookup) Consumes(fn *types.Func) effect.ArgSet {
 	if fn.Name() == "takes" {
 		return 1 << 0
+	}
+
+	if fn.Name() == "Contracted" {
+		return 1 << 2
 	}
 
 	return 0

@@ -39,11 +39,11 @@ var x int
 // A comment that merely mentions memsafe:allow is not a directive.
 var y = x
 
-/* want `MS000: //memsafe:viewof must be in the doc comment of a function or method declaration` */ //memsafe:viewof x
+/* want `MS000: //memsafe:viewof must be in the doc comment of a function, a method, or an interface method` */ //memsafe:viewof x
 
 // Buffer holds bytes.
 //
-/* want `MS000: //memsafe:invalidates must be in the doc comment of a function or method declaration` */ //memsafe:invalidates b
+/* want `MS000: //memsafe:invalidates must be in the doc comment of a function, a method, or an interface method` */ //memsafe:invalidates b
 type Buffer struct{ b []byte }
 
 // Bytes returns a view of b.
@@ -142,5 +142,42 @@ type Vec struct{ x, y float64 }
 // Owner documents a variable.
 //
 /* want `MS000: //memsafe:owned must be in the doc comment of a type declaration` */ //memsafe:owned
-/* want `MS000: //memsafe:consumes must be in the doc comment of a function or method declaration` */ //memsafe:consumes x
+/* want `MS000: //memsafe:consumes must be in the doc comment of a function, a method, or an interface method` */ //memsafe:consumes x
 var owner int
+
+// Contracted declares contracts on its methods, some malformed.
+type Contracted interface {
+	//memsafe:consumes f
+	Write(f, g *Vec)
+
+	//memsafe:borrows p
+	//memsafe:viewof p
+	Both(q int, p []byte) []byte
+
+	/* want `MS000: //memsafe:consumes names receiver, which is not a parameter of Named` */ //memsafe:consumes receiver
+	Named()
+
+	/* want `MS000: //memsafe:viewof needs a result to be the view, and NoResult returns nothing` */ //memsafe:viewof f
+	NoResult(f *Vec)
+
+	/* want `MS000: //memsafe:borrows names n, which carries no memory: its type int is copied by the call` */ //memsafe:borrows n
+	Copied(n int)
+
+	/* want `MS000: //memsafe:consumes must be in the doc comment of a function, a method, or an interface method` */ //memsafe:consumes x
+	Embedded
+}
+
+// Embedded is embedded above.
+type Embedded interface{ M() }
+
+// Holder has an interface that is not a declared type's.
+type Holder struct {
+	/* want `MS000: //memsafe:consumes must be in the doc comment of a function, a method, or an interface method` */ //memsafe:consumes f
+	field func(f *Vec)
+}
+
+// Unconsumable consumes what it already borrows.
+//
+//memsafe:borrows p
+/* want `MS000: //memsafe:borrows and //memsafe:consumes both name p of Unconsumable` */ //memsafe:consumes p
+func Unconsumable(p []byte) {}

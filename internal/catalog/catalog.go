@@ -77,6 +77,9 @@ const (
 	// AppendAliasing is a slice used after an append on a prefix of the same backing array may
 	// have overwritten it.
 	AppendAliasing ID = "MS503"
+	// BrokenInterfaceContract is a method that implements an interface method and does what the
+	// interface method's contract rules out for its callers.
+	BrokenInterfaceContract ID = "MS504"
 )
 
 // Planned checks. Their IDs are reserved so that code can be annotated ahead of the check.
@@ -97,7 +100,7 @@ var known = []ID{
 	GoPointerToC, UseAfterCFree, CAllocationLeak,
 	UseAfterInvalidation, UseOfInvalidatedView, EscapingBorrowedView,
 	UnsynchronizedCapture, ConcurrentMapAccess, UnguardedField,
-	UseAfterMove, EscapingBorrow, AppendAliasing,
+	UseAfterMove, EscapingBorrow, AppendAliasing, BrokenInterfaceContract,
 	ForbiddenImport, UnguardedSharedState, UnspecificSuppression,
 }
 
